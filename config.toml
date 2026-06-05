@@ -1,0 +1,10 @@
+# Castellan brand theme for Streamlit
+[theme]
+primaryColor = "#7AB648"          # Castellan green (accent / interactive)
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F8"
+textColor = "#1A3A5C"             # Castellan navy
+font = "sans serif"
+
+[server]
+maxUploadSize = 50               # results JSONs can be large
