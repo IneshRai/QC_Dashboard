@@ -158,30 +158,6 @@ def build_underwater(results, compare=None):
     return build_drawdown(results, compare)
 
 
-def build_exposure(results, compare=None):
-    """Long / short exposure over time (how invested the strategy is)."""
-    fig, ax = plt.subplots(figsize=(10, 4))
-    series = {k: v for k, v in results.chart_series("Exposure").items()
-              if v is not None and not v.empty}
-    if not series:
-        ax.text(0.5, 0.5, "No exposure data in this file",
-                ha="center", va="center", transform=ax.transAxes, color=SLATE)
-        ax.set_title("Long / Short Exposure")
-        _style(ax)
-        fig.tight_layout()
-        return fig
-    for i, (sname, s) in enumerate(series.items()):
-        ax.plot(s.index, s.values * 100, label=sname, lw=1.3,
-                color=SERIES_COLORS[i % len(SERIES_COLORS)])
-    ax.axhline(0, color="k", lw=0.6)
-    ax.set_ylabel("Exposure %")
-    ax.set_title("Long / Short Exposure")
-    ax.legend()
-    _style(ax)
-    fig.tight_layout()
-    return fig
-
-
 # Castellan-toned diverging colormap for the heatmap: loss -> white -> gain
 _HEAT_CMAP = matplotlib.colors.LinearSegmentedColormap.from_list(
     "castellan_div", ["#B0563C", "#FFFFFF", "#5E9134"])
@@ -236,7 +212,6 @@ CHART_REGISTRY = {
     "monthly_hist":   ("Monthly return histogram", build_monthly_returns_hist, True),
     "monthly_heatmap": ("Monthly returns heatmap", build_monthly_heatmap,    False),
     "rolling_sharpe": ("Rolling 12m Sharpe",      build_rolling_sharpe,      True),
-    "exposure":       ("Long/short exposure",     build_exposure,            False),
 }
 
 
