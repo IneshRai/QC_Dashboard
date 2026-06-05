@@ -97,7 +97,14 @@ def _run_summary_page(pdf, run, page_title, subtitle=None, is_cover=False):
              fontsize=12, fontweight="bold", color=NAVY)
     stats = run.statistics()
     if stats:
-        stat_rows = list(stats.items())
+        # QC stores assets as an encoded Symbol ("AGNC U2N08SGAMHX...").
+        # For asset fields, keep just the ticker before the first space.
+        def _clean(key, value):
+            v = str(value)
+            if "asset" in key.lower():
+                v = v.split(" ")[0]
+            return v
+        stat_rows = [(k, _clean(k, v)) for k, v in stats.items()]
         # tighter spacing so the full block (often ~27 rows) fits the column
         step = min(0.0275, (top - 0.06) / max(len(stat_rows), 1))
         _draw_metric_rows(fig, stat_rows,
