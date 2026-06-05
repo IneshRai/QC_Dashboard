@@ -59,7 +59,7 @@ def build_equity_curve(results, compare=None, log_scale=True, show_benchmark=Tru
             bm = bm[bm.index >= eq.index[0]]
             if not bm.empty:
                 ax.plot(bm.index, bm / bm.iloc[0] * 100,
-                        label=f"Benchmark", color=BENCHMARK_COLOR,
+                        label="Benchmark", color=BENCHMARK_COLOR,
                         lw=1.2, ls="--", alpha=0.9)
 
     if log_scale:
@@ -157,27 +157,34 @@ def build_underwater(results, compare=None):
     return build_drawdown(results, compare)
 
 
-def build_raw_chart(results, chart_name):
-    """Plot any raw chart from the JSON by name (all of its series).
+def build_raw_chart(results, chart_name, max_series=12):
+    """Plot any raw chart from the JSON by name.
 
-    Used by the 'raw chart' checkboxes so arbitrary QC charts (Exposure,
-    Portfolio Turnover, Benchmark, etc.) can be dropped into the PDF as-is.
+    Some QC charts (Assets Sales Volume, Portfolio Margin) have one series per
+    traded symbol -- dozens of them. We cap how many we draw so the figure (and
+    the PDF) stay readable and fast, and note when series were omitted.
     """
     fig, ax = plt.subplots(figsize=(10, 4.5))
-    series = results.chart_series(chart_name)
-    plotted = False
-    for i, (sname, s) in enumerate(series.items()):
-        if s is None or s.empty:
-            continue
+    series = {k: v for k, v in results.chart_series(chart_name).items()
+              if v is not None and not v.empty}
+    names = list(series.keys())
+    shown = names[:max_series]
+    omitted = len(names) - len(shown)
+
+    for i, sname in enumerate(shown):
+        s = series[sname]
         ax.plot(s.index, s.values, label=sname, lw=1.3,
                 color=SERIES_COLORS[i % len(SERIES_COLORS)])
-        plotted = True
-    if not plotted:
+
+    if not shown:
         ax.text(0.5, 0.5, "No plottable data in this chart",
                 ha="center", va="center", transform=ax.transAxes, color=SLATE)
-    else:
-        ax.legend()
-    ax.set_title(chart_name)
+    elif len(shown) <= 8:
+        ax.legend(fontsize=8)
+    title = chart_name
+    if omitted > 0:
+        title += f"  (showing {len(shown)} of {len(names)} series)"
+    ax.set_title(title)
     _style(ax)
     fig.tight_layout()
     return fig

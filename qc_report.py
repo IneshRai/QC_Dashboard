@@ -45,13 +45,19 @@ def _fmt(metrics):
     return rows
 
 
-def _draw_metric_rows(fig, rows, x_label, x_value, top_y, step, fontsize=10):
-    """Draw (label, value) rows down a column. Returns the final y reached."""
+def _draw_metric_rows(fig, rows, x_label, x_value, top_y, step, fontsize=10,
+                      max_value_chars=22):
+    """Draw (label, value) rows down a column. Labels are left-aligned at
+    x_label; values are RIGHT-aligned at x_value so they can never run off the
+    page edge. Over-long values are truncated. Returns the final y reached."""
     y = top_y
     for label, value in rows:
+        v = str(value)
+        if len(v) > max_value_chars:
+            v = v[:max_value_chars - 1] + "\u2026"
         fig.text(x_label, y, str(label), fontsize=fontsize, color=SLATE)
-        fig.text(x_value, y, str(value), fontsize=fontsize, fontweight="bold",
-                 color=NAVY)
+        fig.text(x_value, y, v, fontsize=fontsize, fontweight="bold",
+                 color=NAVY, ha="right")
         y -= step
     return y
 
@@ -84,24 +90,20 @@ def _run_summary_page(pdf, run, page_title, subtitle=None, is_cover=False):
     fig.text(0.1, top + 0.03, run.name + " - computed metrics",
              fontsize=12, fontweight="bold", color=NAVY)
     _draw_metric_rows(fig, _fmt(run.computed_metrics()),
-                      x_label=0.11, x_value=0.34, top_y=top, step=0.034)
+                      x_label=0.11, x_value=0.47, top_y=top, step=0.034,
+                      max_value_chars=20)
 
     # ---- Right column: QuantConnect's own reported statistics (full) ----
     fig.text(0.55, top + 0.03, "QuantConnect reported statistics",
              fontsize=12, fontweight="bold", color=NAVY)
     stats = run.statistics()
     if stats:
-        # Truncate over-long values (e.g. capacity asset symbols) so they
-        # don't run off the page edge.
-        def _clip(v):
-            v = str(v)
-            return (v[:13] + "\u2026") if len(v) > 14 else v
-        stat_rows = [(k, _clip(v)) for k, v in stats.items()]
+        stat_rows = list(stats.items())
         # tighter spacing so the full block (often ~27 rows) fits the column
         step = min(0.0275, (top - 0.06) / max(len(stat_rows), 1))
         _draw_metric_rows(fig, stat_rows,
-                          x_label=0.56, x_value=0.80, top_y=top, step=step,
-                          fontsize=9)
+                          x_label=0.56, x_value=0.9, top_y=top, step=step,
+                          fontsize=9, max_value_chars=14)
     else:
         fig.text(0.56, top, "No statistics block found in this file.",
                  fontsize=9, color=SLATE)

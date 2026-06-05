@@ -14,7 +14,7 @@ Upload one results JSON to analyze, or two to compare (e.g. before/after a fix).
 import streamlit as st
 
 from qc_parser import load_results, InvalidBacktestFile
-from qc_charts import CHART_REGISTRY, build_chart, build_equity_curve
+from qc_charts import CHART_REGISTRY, build_chart, build_equity_curve, build_raw_chart
 from qc_report import generate_pdf
 from qc_brand import streamlit_css, NAVY
 
@@ -29,6 +29,7 @@ st.markdown("<hr class='castellan-rule'>", unsafe_allow_html=True)
 st.markdown("<p class='castellan-caption'>Analyze QuantConnect backtest "
             "results. Upload the JSON from the backtest Overview tab "
             "(Download Results).</p>", unsafe_allow_html=True)
+
 
 def safe_load(uploaded, label):
     """Load an uploaded file, showing a clean error instead of a stack trace."""
@@ -49,7 +50,6 @@ with st.sidebar:
     primary_label = st.text_input("Primary label", value="Backtest")
     compare_label = st.text_input("Comparison label", value="Comparison")
     log_scale = st.checkbox("Log scale on equity curve", value=True)
-    show_benchmark = st.checkbox("Show benchmark", value=True)
 
 if primary_file is None:
     st.info("Upload a results JSON in the sidebar to begin.")
@@ -60,13 +60,9 @@ if results is None:
     st.stop()
 compare = safe_load(compare_file, compare_label)
 
-# Note whether a benchmark is available to overlay.
+# Whether a benchmark series is available to overlay on the equity curve.
 _bm = results.benchmark()
 has_benchmark = _bm is not None and not _bm.empty
-if show_benchmark and not has_benchmark:
-    st.info("No benchmark series in this file (no 'Benchmark' chart). To "
-            "include one, add self.SetBenchmark(\"SPY\") in your algorithm "
-            "and re-run the backtest.")
 
 # ---------------- Headline metrics ----------------
 m = results.computed_metrics()
@@ -94,6 +90,16 @@ cols = st.columns(len(CHART_REGISTRY))
 for (key, (label, _builder, _cmp)), col in zip(CHART_REGISTRY.items(), cols):
     default_on = key in ("equity_curve", "drawdown")
     selected[key] = col.checkbox(label, value=default_on, key=f"sel_{key}")
+
+# Benchmark toggle (on by default) sits right with the chart controls.
+# Only meaningful when a Benchmark series exists in the file.
+if has_benchmark:
+    show_benchmark = st.checkbox(
+        "Show benchmark on equity curve", value=True, key="show_benchmark")
+else:
+    show_benchmark = False
+    st.caption("No benchmark included (no 'Benchmark' series in this file). "
+               "Add self.SetBenchmark(\"SPY\") in your algorithm to include one.")
 
 # ---------------- Render selected charts ----------------
 for key, (label, _b, _c) in CHART_REGISTRY.items():
@@ -123,17 +129,9 @@ if raw_names:
 else:
     st.caption("No charts found in this file.")
 
-# Render the checked raw charts inline (interactive line charts).
+# Render the checked raw charts inline (one figure each, matching the PDF).
 for cname in raw_selected:
-    st.markdown(f"**{cname}**")
-    series = results.chart_series(cname)
-    plotted = False
-    for sname, s in series.items():
-        if not s.empty:
-            st.line_chart(s.rename(sname))
-            plotted = True
-    if not plotted:
-        st.caption("No plottable data in this chart.")
+    st.pyplot(build_raw_chart(results, cname))
 
 # ---------------- PDF export ----------------
 st.subheader("Export")
