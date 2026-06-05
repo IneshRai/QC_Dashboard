@@ -19,7 +19,8 @@ matplotlib.use("Agg")            # headless backend; safe for Streamlit + PDF
 import matplotlib.pyplot as plt
 import numpy as np
 
-from qc_brand import PRIMARY_COLOR, COMPARE_COLOR, SERIES_COLORS, apply_mpl_theme
+from qc_brand import (PRIMARY_COLOR, COMPARE_COLOR, SERIES_COLORS, SLATE,
+                      apply_mpl_theme)
 
 # Apply Castellan styling to every figure built in this module.
 apply_mpl_theme()
@@ -28,6 +29,7 @@ apply_mpl_theme()
 PRIMARY = PRIMARY_COLOR
 SECOND  = COMPARE_COLOR
 ACCENTS = SERIES_COLORS[2:]
+BENCHMARK_COLOR = SLATE
 
 
 def _style(ax):
@@ -37,7 +39,7 @@ def _style(ax):
 
 
 # ----------------------------------------------------------------- builders
-def build_equity_curve(results, compare=None, log_scale=True):
+def build_equity_curve(results, compare=None, log_scale=True, show_benchmark=True):
     fig, ax = plt.subplots(figsize=(10, 4.5))
     runs = [(results, PRIMARY)]
     if compare is not None:
@@ -47,6 +49,19 @@ def build_equity_curve(results, compare=None, log_scale=True):
         if eq.empty:
             continue
         ax.plot(eq.index, eq / eq.iloc[0] * 100, label=r.name, color=color, lw=1.5)
+
+    # Optional benchmark overlay (e.g. SPY), normalized to the same start = 100.
+    # Aligned to the primary run's start so it's comparable to the equity line.
+    if show_benchmark:
+        bm = results.benchmark()
+        eq = results.equity_curve()
+        if bm is not None and not bm.empty and not eq.empty:
+            bm = bm[bm.index >= eq.index[0]]
+            if not bm.empty:
+                ax.plot(bm.index, bm / bm.iloc[0] * 100,
+                        label=f"Benchmark", color=BENCHMARK_COLOR,
+                        lw=1.2, ls="--", alpha=0.9)
+
     if log_scale:
         ax.set_yscale("log")
     ax.set_ylabel("Growth of 100" + (" (log)" if log_scale else ""))
@@ -140,6 +155,32 @@ def build_rolling_sharpe(results, compare=None, window=12):
 def build_underwater(results, compare=None):
     """Time-underwater: same as drawdown but emphasizes recovery periods."""
     return build_drawdown(results, compare)
+
+
+def build_raw_chart(results, chart_name):
+    """Plot any raw chart from the JSON by name (all of its series).
+
+    Used by the 'raw chart' checkboxes so arbitrary QC charts (Exposure,
+    Portfolio Turnover, Benchmark, etc.) can be dropped into the PDF as-is.
+    """
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    series = results.chart_series(chart_name)
+    plotted = False
+    for i, (sname, s) in enumerate(series.items()):
+        if s is None or s.empty:
+            continue
+        ax.plot(s.index, s.values, label=sname, lw=1.3,
+                color=SERIES_COLORS[i % len(SERIES_COLORS)])
+        plotted = True
+    if not plotted:
+        ax.text(0.5, 0.5, "No plottable data in this chart",
+                ha="center", va="center", transform=ax.transAxes, color=SLATE)
+    else:
+        ax.legend()
+    ax.set_title(chart_name)
+    _style(ax)
+    fig.tight_layout()
+    return fig
 
 
 # ----------------------------------------------------------------- registry

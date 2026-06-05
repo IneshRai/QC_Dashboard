@@ -30,6 +30,24 @@ st.markdown("<p class='castellan-caption'>Analyze QuantConnect backtest "
             "results. Upload the JSON from the backtest Overview tab "
             "(Download Results).</p>", unsafe_allow_html=True)
 
+# ---- Access control: restrict to Castellan staff ----
+# NOTE: this block was re-added because the uploaded app.py had no login gate.
+# If your repo already has a working login gate, keep YOUR version of this block.
+ALLOWED_DOMAIN = "yourfirm.com"   # <-- set to your firm's email domain
+
+if not st.user.is_logged_in:
+    if st.button("Log in"):
+        st.login()
+    st.stop()
+
+if not st.user.email.endswith("@" + ALLOWED_DOMAIN):
+    st.error("This tool is restricted to Castellan staff.")
+    if st.button("Log out"):
+        st.logout()
+    st.stop()
+
+st.sidebar.caption(f"Signed in as {st.user.email}")
+
 
 def safe_load(uploaded, label):
     """Load an uploaded file, showing a clean error instead of a stack trace."""
@@ -50,6 +68,7 @@ with st.sidebar:
     primary_label = st.text_input("Primary label", value="Backtest")
     compare_label = st.text_input("Comparison label", value="Comparison")
     log_scale = st.checkbox("Log scale on equity curve", value=True)
+    show_benchmark = st.checkbox("Show benchmark", value=True)
 
 if primary_file is None:
     st.info("Upload a results JSON in the sidebar to begin.")
@@ -59,6 +78,14 @@ results = safe_load(primary_file, primary_label)
 if results is None:
     st.stop()
 compare = safe_load(compare_file, compare_label)
+
+# Note whether a benchmark is available to overlay.
+_bm = results.benchmark()
+has_benchmark = _bm is not None and not _bm.empty
+if show_benchmark and not has_benchmark:
+    st.info("No benchmark series in this file (no 'Benchmark' chart). To "
+            "include one, add self.SetBenchmark(\"SPY\") in your algorithm "
+            "and re-run the backtest.")
 
 # ---------------- Headline metrics ----------------
 m = results.computed_metrics()
@@ -92,28 +119,65 @@ for key, (label, _b, _c) in CHART_REGISTRY.items():
     if not selected.get(key):
         continue
     if key == "equity_curve":
-        fig = build_equity_curve(results, compare=compare, log_scale=log_scale)
+        fig = build_equity_curve(results, compare=compare, log_scale=log_scale,
+                                 show_benchmark=show_benchmark)
     else:
         fig = build_chart(key, results, compare=compare)
     st.pyplot(fig)
+
+# ---------------- Raw JSON chart selection ----------------
+# Checkboxes for any chart present in the JSON (Exposure, Turnover, etc.).
+# Checked ones render below AND get one page each in the PDF.
+st.subheader("Raw JSON charts")
+st.write("Include any other chart from the results file (one page each in the PDF):")
+
+raw_names = results.list_charts()
+raw_selected = []
+if raw_names:
+    rcols = st.columns(min(3, len(raw_names)))
+    for i, cname in enumerate(raw_names):
+        col = rcols[i % len(rcols)]
+        if col.checkbox(cname, value=False, key=f"raw_{cname}"):
+            raw_selected.append(cname)
+else:
+    st.caption("No charts found in this file.")
+
+# Render the checked raw charts inline (interactive line charts).
+for cname in raw_selected:
+    st.markdown(f"**{cname}**")
+    series = results.chart_series(cname)
+    plotted = False
+    for sname, s in series.items():
+        if not s.empty:
+            st.line_chart(s.rename(sname))
+            plotted = True
+    if not plotted:
+        st.caption("No plottable data in this chart.")
 
 # ---------------- PDF export ----------------
 st.subheader("Export")
 chosen = [k for k, v in selected.items() if v]
 report_title = st.text_input("Report title", value="Castellan Backtest Report")
+pdf_filename = st.text_input("PDF file name", value="castellan_backtest_report")
 include_cover = st.checkbox("Include cover page with stats", value=True)
 
-if not chosen:
-    st.warning("Select at least one chart to enable PDF export.")
+if not chosen and not raw_selected:
+    st.warning("Select at least one chart (curated or raw) to enable PDF export.")
 else:
     pdf_bytes = generate_pdf(
         results, chosen, compare=compare,
         title=report_title, include_cover=include_cover,
+        raw_chart_names=raw_selected, show_benchmark=show_benchmark,
     )
+    # Sanitize the filename and ensure a single .pdf extension.
+    safe_name = (pdf_filename or "castellan_backtest_report").strip()
+    if safe_name.lower().endswith(".pdf"):
+        safe_name = safe_name[:-4]
+    safe_name = safe_name or "castellan_backtest_report"
     st.download_button(
         "Download PDF report",
         data=pdf_bytes,
-        file_name="castellan_backtest_report.pdf",
+        file_name=f"{safe_name}.pdf",
         mime="application/pdf",
     )
 
@@ -127,12 +191,3 @@ with st.expander("QuantConnect's reported statistics"):
         )
     else:
         st.write("No statistics block found in this file.")
-
-# ---------------- Raw chart explorer ----------------
-with st.expander("Explore any raw chart in the JSON"):
-    names = results.list_charts()
-    pick = st.selectbox("Chart in JSON", names)
-    series = results.chart_series(pick)
-    for sname, s in series.items():
-        if not s.empty:
-            st.line_chart(s.rename(sname))
