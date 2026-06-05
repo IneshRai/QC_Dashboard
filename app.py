@@ -30,25 +30,6 @@ st.markdown("<p class='castellan-caption'>Analyze QuantConnect backtest "
             "results. Upload the JSON from the backtest Overview tab "
             "(Download Results).</p>", unsafe_allow_html=True)
 
-# ---- Access control: restrict to Castellan staff ----
-# NOTE: this block was re-added because the uploaded app.py had no login gate.
-# If your repo already has a working login gate, keep YOUR version of this block.
-ALLOWED_DOMAIN = "yourfirm.com"   # <-- set to your firm's email domain
-
-if not st.user.is_logged_in:
-    if st.button("Log in"):
-        st.login()
-    st.stop()
-
-if not st.user.email.endswith("@" + ALLOWED_DOMAIN):
-    st.error("This tool is restricted to Castellan staff.")
-    if st.button("Log out"):
-        st.logout()
-    st.stop()
-
-st.sidebar.caption(f"Signed in as {st.user.email}")
-
-
 def safe_load(uploaded, label):
     """Load an uploaded file, showing a clean error instead of a stack trace."""
     if uploaded is None:
