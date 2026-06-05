@@ -14,7 +14,7 @@ Upload one results JSON to analyze, or two to compare (e.g. before/after a fix).
 import streamlit as st
 
 from qc_parser import load_results, InvalidBacktestFile
-from qc_charts import CHART_REGISTRY, build_chart, build_equity_curve, build_raw_chart
+from qc_charts import CHART_REGISTRY, build_chart, build_equity_curve
 from qc_report import generate_pdf
 from qc_brand import streamlit_css, NAVY
 
@@ -112,27 +112,6 @@ for key, (label, _b, _c) in CHART_REGISTRY.items():
         fig = build_chart(key, results, compare=compare)
     st.pyplot(fig)
 
-# ---------------- Raw JSON chart selection ----------------
-# Checkboxes for any chart present in the JSON (Exposure, Turnover, etc.).
-# Checked ones render below AND get one page each in the PDF.
-st.subheader("Raw JSON charts")
-st.write("Include any other chart from the results file (one page each in the PDF):")
-
-raw_names = results.list_charts()
-raw_selected = []
-if raw_names:
-    rcols = st.columns(min(3, len(raw_names)))
-    for i, cname in enumerate(raw_names):
-        col = rcols[i % len(rcols)]
-        if col.checkbox(cname, value=False, key=f"raw_{cname}"):
-            raw_selected.append(cname)
-else:
-    st.caption("No charts found in this file.")
-
-# Render the checked raw charts inline (one figure each, matching the PDF).
-for cname in raw_selected:
-    st.pyplot(build_raw_chart(results, cname))
-
 # ---------------- PDF export ----------------
 st.subheader("Export")
 chosen = [k for k, v in selected.items() if v]
@@ -140,13 +119,13 @@ report_title = st.text_input("Report title", value="Castellan Backtest Report")
 pdf_filename = st.text_input("PDF file name", value="castellan_backtest_report")
 include_cover = st.checkbox("Include cover page with stats", value=True)
 
-if not chosen and not raw_selected:
-    st.warning("Select at least one chart (curated or raw) to enable PDF export.")
+if not chosen:
+    st.warning("Select at least one chart to enable PDF export.")
 else:
     pdf_bytes = generate_pdf(
         results, chosen, compare=compare,
         title=report_title, include_cover=include_cover,
-        raw_chart_names=raw_selected, show_benchmark=show_benchmark,
+        show_benchmark=show_benchmark,
     )
     # Sanitize the filename and ensure a single .pdf extension.
     safe_name = (pdf_filename or "castellan_backtest_report").strip()

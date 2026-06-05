@@ -17,6 +17,7 @@ from __future__ import annotations
 import matplotlib
 matplotlib.use("Agg")            # headless backend; safe for Streamlit + PDF
 import matplotlib.pyplot as plt
+import matplotlib.colors
 import numpy as np
 
 from qc_brand import (PRIMARY_COLOR, COMPARE_COLOR, SERIES_COLORS, SLATE,
@@ -157,35 +158,71 @@ def build_underwater(results, compare=None):
     return build_drawdown(results, compare)
 
 
-def build_raw_chart(results, chart_name, max_series=12):
-    """Plot any raw chart from the JSON by name.
-
-    Some QC charts (Assets Sales Volume, Portfolio Margin) have one series per
-    traded symbol -- dozens of them. We cap how many we draw so the figure (and
-    the PDF) stay readable and fast, and note when series were omitted.
-    """
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    series = {k: v for k, v in results.chart_series(chart_name).items()
+def build_exposure(results, compare=None):
+    """Long / short exposure over time (how invested the strategy is)."""
+    fig, ax = plt.subplots(figsize=(10, 4))
+    series = {k: v for k, v in results.chart_series("Exposure").items()
               if v is not None and not v.empty}
-    names = list(series.keys())
-    shown = names[:max_series]
-    omitted = len(names) - len(shown)
-
-    for i, sname in enumerate(shown):
-        s = series[sname]
-        ax.plot(s.index, s.values, label=sname, lw=1.3,
-                color=SERIES_COLORS[i % len(SERIES_COLORS)])
-
-    if not shown:
-        ax.text(0.5, 0.5, "No plottable data in this chart",
+    if not series:
+        ax.text(0.5, 0.5, "No exposure data in this file",
                 ha="center", va="center", transform=ax.transAxes, color=SLATE)
-    elif len(shown) <= 8:
-        ax.legend(fontsize=8)
-    title = chart_name
-    if omitted > 0:
-        title += f"  (showing {len(shown)} of {len(names)} series)"
-    ax.set_title(title)
+        ax.set_title("Long / Short Exposure")
+        _style(ax)
+        fig.tight_layout()
+        return fig
+    for i, (sname, s) in enumerate(series.items()):
+        ax.plot(s.index, s.values * 100, label=sname, lw=1.3,
+                color=SERIES_COLORS[i % len(SERIES_COLORS)])
+    ax.axhline(0, color="k", lw=0.6)
+    ax.set_ylabel("Exposure %")
+    ax.set_title("Long / Short Exposure")
+    ax.legend()
     _style(ax)
+    fig.tight_layout()
+    return fig
+
+
+# Castellan-toned diverging colormap for the heatmap: loss -> white -> gain
+_HEAT_CMAP = matplotlib.colors.LinearSegmentedColormap.from_list(
+    "castellan_div", ["#B0563C", "#FFFFFF", "#5E9134"])
+
+
+def build_monthly_heatmap(results, compare=None):
+    """Calendar heatmap of monthly returns (years x months)."""
+    import calendar
+    rm = results.returns("ME") * 100
+    fig, ax = plt.subplots(figsize=(10, max(2.2, 0.5 * 0 + 0.55 *
+                           max(1, len(set(rm.index.year)))) + 1.2))
+    if rm.empty:
+        ax.text(0.5, 0.5, "Not enough data for a monthly heatmap",
+                ha="center", va="center", transform=ax.transAxes, color=SLATE)
+        ax.set_title("Monthly Returns (%)")
+        ax.axis("off")
+        fig.tight_layout()
+        return fig
+    df = rm.to_frame("ret")
+    df["year"] = df.index.year
+    df["month"] = df.index.month
+    grid = df.pivot_table(index="year", columns="month", values="ret")
+    grid = grid.reindex(columns=range(1, 13))
+    years = list(grid.index)
+    vals = grid.values
+    bound = np.nanmax(np.abs(vals)) if np.isfinite(np.nanmax(np.abs(vals))) else 1
+    im = ax.imshow(vals, aspect="auto", cmap=_HEAT_CMAP, vmin=-bound, vmax=bound)
+    ax.set_xticks(range(12))
+    ax.set_xticklabels([calendar.month_abbr[m] for m in range(1, 13)], fontsize=8)
+    ax.set_yticks(range(len(years)))
+    ax.set_yticklabels(years, fontsize=8)
+    # annotate each cell with the value
+    for r in range(vals.shape[0]):
+        for c in range(vals.shape[1]):
+            v = vals[r, c]
+            if v == v:  # not NaN
+                ax.text(c, r, f"{v:.1f}", ha="center", va="center",
+                        fontsize=7, color="#1A3A5C")
+    ax.set_title("Monthly Returns (%)")
+    ax.grid(False)
+    fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
     fig.tight_layout()
     return fig
 
@@ -197,7 +234,9 @@ CHART_REGISTRY = {
     "drawdown":       ("Drawdowns",               build_drawdown,            True),
     "annual_returns": ("Annual returns",          build_annual_returns,      True),
     "monthly_hist":   ("Monthly return histogram", build_monthly_returns_hist, True),
+    "monthly_heatmap": ("Monthly returns heatmap", build_monthly_heatmap,    False),
     "rolling_sharpe": ("Rolling 12m Sharpe",      build_rolling_sharpe,      True),
+    "exposure":       ("Long/short exposure",     build_exposure,            False),
 }
 
 

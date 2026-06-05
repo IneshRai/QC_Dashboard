@@ -16,8 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from qc_charts import (build_chart, build_equity_curve, build_raw_chart,
-                       CHART_REGISTRY)
+from qc_charts import (build_chart, build_equity_curve, CHART_REGISTRY)
 from qc_brand import NAVY, GREEN, SLATE, apply_mpl_theme
 
 apply_mpl_theme()
@@ -125,19 +124,17 @@ def _cover_page(pdf, results, compare, title):
 
 def generate_pdf(results, selected_keys, compare=None,
                  title="Backtest Report", include_cover=True,
-                 raw_chart_names=None, show_benchmark=True) -> bytes:
+                 show_benchmark=True) -> bytes:
     """Render selected charts (by registry key) into a PDF, return bytes.
 
-    selected_keys:   list of CHART_REGISTRY keys, in the order to render.
-    raw_chart_names: list of raw JSON chart names to append, one page each.
-    show_benchmark:  overlay the benchmark on the equity curve when present.
+    selected_keys:  list of CHART_REGISTRY keys, in the order to render.
+    show_benchmark: overlay the benchmark on the equity curve when present.
     """
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
         if include_cover:
             _cover_page(pdf, results, compare, title)
 
-        # Curated registry charts
         for key in selected_keys:
             if key not in CHART_REGISTRY:
                 continue
@@ -147,13 +144,6 @@ def generate_pdf(results, selected_keys, compare=None,
             else:
                 fig = build_chart(key, results, compare=compare)
             # place the chart on a portrait page with a little margin
-            fig.set_size_inches(8.5, 5.0)
-            pdf.savefig(fig, bbox_inches="tight")
-            plt.close(fig)
-
-        # Raw JSON charts, one page each
-        for cname in (raw_chart_names or []):
-            fig = build_raw_chart(results, cname)
             fig.set_size_inches(8.5, 5.0)
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
