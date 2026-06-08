@@ -262,7 +262,11 @@ def build_trades_per_month(results, compare=None):
     ax.bar(x + w/2, [closes.get(m, 0) for m in months], w,
            color=SECOND, label="Closed")
     ax.set_xticks(x)
-    ax.set_xticklabels([str(m) for m in months], rotation=45, fontsize=7, ha="right")
+    # Thin labels so long histories (hundreds of months) stay readable.
+    max_labels = 20
+    step = max(1, len(months) // max_labels)
+    labels = [str(m) if i % step == 0 else "" for i, m in enumerate(months)]
+    ax.set_xticklabels(labels, rotation=45, fontsize=7, ha="right")
     ax.set_ylabel("Number of trades")
     ax.set_title("Trades Opened vs Closed per Month")
     ax.legend()

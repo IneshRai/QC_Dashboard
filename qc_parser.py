@@ -139,6 +139,28 @@ class BacktestResults:
             total += float("0." + m.group(5)) / 86400
         return -total if neg else total
 
+    @staticmethod
+    def _ticker_of(sym):
+        """Best-effort human ticker from QC's many symbol shapes.
+
+        Handles: dict with value/permtick/ticker, a plain string, or an
+        encoded SID string like 'AMR WMX6K8NSR9ET' (take the leading token).
+        Returns '?' only if nothing usable is present.
+        """
+        if sym is None:
+            return "?"
+        if isinstance(sym, dict):
+            for k in ("value", "permtick", "ticker", "symbol", "Value", "Symbol"):
+                v = sym.get(k)
+                if v:
+                    return str(v).split(" ")[0]
+            sid = sym.get("id") or sym.get("ID") or sym.get("Id")
+            if sid:
+                return str(sid).split(" ")[0]
+            return "?"
+        s = str(sym).strip()
+        return s.split(" ")[0] if s else "?"
+
     def closed_trades(self) -> pd.DataFrame:
         """Return QC's closed trades as a tidy DataFrame, or empty if absent.
 
@@ -152,11 +174,8 @@ class BacktestResults:
             return pd.DataFrame()
         rows = []
         for t in ct:
-            sym = t.get("symbol") or {}
-            if isinstance(sym, dict):
-                ticker = sym.get("value") or sym.get("permtick") or str(sym.get("id", "?"))
-            else:
-                ticker = str(sym)
+            sym = t.get("symbol")
+            ticker = self._ticker_of(sym)
             ep = t.get("entryPrice")
             xp = t.get("exitPrice")
             qty = t.get("quantity") or 0
