@@ -149,6 +149,10 @@ class BacktestResults:
         """
         if sym is None:
             return "?"
+        if isinstance(sym, list):
+            sym = sym[0] if sym else None
+            if sym is None:
+                return "?"
         if isinstance(sym, dict):
             for k in ("value", "permtick", "ticker", "symbol", "Value", "Symbol"):
                 v = sym.get(k)
@@ -175,6 +179,10 @@ class BacktestResults:
         rows = []
         for t in ct:
             sym = t.get("symbol")
+            if sym is None:
+                syms = t.get("symbols")
+                if isinstance(syms, list) and syms:
+                    sym = syms[0]
             ticker = self._ticker_of(sym)
             ep = t.get("entryPrice")
             xp = t.get("exitPrice")
