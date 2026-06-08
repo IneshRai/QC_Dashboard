@@ -16,6 +16,7 @@ import streamlit as st
 from qc_parser import load_results, InvalidBacktestFile
 from qc_charts import CHART_REGISTRY, build_chart, build_equity_curve
 from qc_report import generate_pdf
+from qc_quantstats import build_quantstats_html, QuantStatsError
 from qc_brand import streamlit_css, NAVY
 
 st.set_page_config(page_title="Castellan Backtest Dashboard",
@@ -148,6 +149,44 @@ else:
             mime="application/pdf",
         )
         st.caption("Change any option above and click Generate again to refresh.")
+
+# ---------------- QuantStats tearsheet (separate HTML) ----------------
+st.subheader("QuantStats tearsheet")
+st.write("Generate a full QuantStats tearsheet as a separate HTML file "
+         "(opens in any browser).")
+
+qs_bm_mode = st.radio(
+    "Benchmark for the tearsheet",
+    ["Backtest's own benchmark", "Fetch a ticker (yfinance)"],
+    horizontal=True, key="qs_bm_mode",
+)
+qs_ticker = None
+if qs_bm_mode == "Fetch a ticker (yfinance)":
+    qs_ticker = st.text_input("Benchmark ticker", value="SPY", key="qs_ticker")
+elif not has_benchmark:
+    st.caption("This file has no benchmark series, so the tearsheet will have "
+               "no benchmark unless you fetch a ticker.")
+qs_title = st.text_input("Tearsheet title", value="Castellan Strategy Tearsheet",
+                         key="qs_title")
+
+if st.button("Generate QuantStats tearsheet"):
+    with st.spinner("Building QuantStats tearsheet..."):
+        try:
+            st.session_state["qs_html"] = build_quantstats_html(
+                results, benchmark_ticker=(qs_ticker or None), title=qs_title)
+        except QuantStatsError as e:
+            st.session_state.pop("qs_html", None)
+            st.error(str(e))
+
+if st.session_state.get("qs_html"):
+    st.download_button(
+        "Download QuantStats tearsheet (HTML)",
+        data=st.session_state["qs_html"],
+        file_name="quantstats_tearsheet.html",
+        mime="text/html",
+    )
+    st.caption("Open it in a browser; for a PDF use the browser's "
+               "Print \u2192 Save as PDF.")
 
 # ---------------- QC's own statistics ----------------
 with st.expander("QuantConnect's reported statistics"):
