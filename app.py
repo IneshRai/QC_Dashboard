@@ -86,10 +86,13 @@ st.subheader("Charts")
 st.write("Select which charts to display and include in the PDF:")
 
 selected = {}
-cols = st.columns(len(CHART_REGISTRY))
-for (key, (label, _builder, _cmp)), col in zip(CHART_REGISTRY.items(), cols):
-    default_on = key in ("equity_curve", "drawdown")
-    selected[key] = col.checkbox(label, value=default_on, key=f"sel_{key}")
+items = list(CHART_REGISTRY.items())
+per_row = 3
+for start in range(0, len(items), per_row):
+    cols = st.columns(per_row)
+    for (key, (label, _builder, _cmp)), col in zip(items[start:start + per_row], cols):
+        default_on = key in ("equity_curve", "drawdown")
+        selected[key] = col.checkbox(label, value=default_on, key=f"sel_{key}")
 
 # Benchmark toggle (on by default) sits right with the chart controls.
 # Only meaningful when a Benchmark series exists in the file.
@@ -122,22 +125,29 @@ include_cover = st.checkbox("Include cover page with stats", value=True)
 if not chosen:
     st.warning("Select at least one chart to enable PDF export.")
 else:
-    pdf_bytes = generate_pdf(
-        results, chosen, compare=compare,
-        title=report_title, include_cover=include_cover,
-        show_benchmark=show_benchmark,
-    )
-    # Sanitize the filename and ensure a single .pdf extension.
-    safe_name = (pdf_filename or "castellan_backtest_report").strip()
-    if safe_name.lower().endswith(".pdf"):
-        safe_name = safe_name[:-4]
-    safe_name = safe_name or "castellan_backtest_report"
-    st.download_button(
-        "Download PDF report",
-        data=pdf_bytes,
-        file_name=f"{safe_name}.pdf",
-        mime="application/pdf",
-    )
+    # Build the PDF only when the user clicks Generate, using the CURRENT
+    # options. This makes the cover/benchmark/chart choices take effect
+    # predictably instead of rebuilding on every keystroke.
+    if st.button("Generate PDF report"):
+        safe_name = (pdf_filename or "castellan_backtest_report").strip()
+        if safe_name.lower().endswith(".pdf"):
+            safe_name = safe_name[:-4]
+        safe_name = safe_name or "castellan_backtest_report"
+        st.session_state["pdf_bytes"] = generate_pdf(
+            results, chosen, compare=compare,
+            title=report_title, include_cover=include_cover,
+            show_benchmark=show_benchmark,
+        )
+        st.session_state["pdf_name"] = f"{safe_name}.pdf"
+
+    if st.session_state.get("pdf_bytes"):
+        st.download_button(
+            "Download PDF report",
+            data=st.session_state["pdf_bytes"],
+            file_name=st.session_state.get("pdf_name", "castellan_backtest_report.pdf"),
+            mime="application/pdf",
+        )
+        st.caption("Change any option above and click Generate again to refresh.")
 
 # ---------------- QC's own statistics ----------------
 with st.expander("QuantConnect's reported statistics"):

@@ -19,9 +19,10 @@ matplotlib.use("Agg")            # headless backend; safe for Streamlit + PDF
 import matplotlib.pyplot as plt
 import matplotlib.colors
 import numpy as np
+import pandas as pd
 
 from qc_brand import (PRIMARY_COLOR, COMPARE_COLOR, SERIES_COLORS, SLATE,
-                      apply_mpl_theme)
+                      NAVY, GRID, apply_mpl_theme)
 
 # Apply Castellan styling to every figure built in this module.
 apply_mpl_theme()
@@ -203,6 +204,146 @@ def build_monthly_heatmap(results, compare=None):
     return fig
 
 
+# ------------------------------------------------- closed-trade analytics
+def _no_trades(ax, title):
+    ax.text(0.5, 0.5, "No closed-trade data in this file",
+            ha="center", va="center", transform=ax.transAxes, color=SLATE)
+    ax.set_title(title)
+    _style(ax)
+
+
+def build_trade_pnl_hist(results, compare=None):
+    """Histogram of per-trade return (%)."""
+    fig, ax = plt.subplots(figsize=(10, 4))
+    df = results.closed_trades()
+    if df.empty or df["return_pct"].dropna().empty:
+        _no_trades(ax, "Per-Trade P&L (%)")
+        fig.tight_layout(); return fig
+    rets = df["return_pct"].dropna() * 100
+    ax.hist(rets, bins=30, color=PRIMARY, alpha=0.8)
+    ax.axvline(0, color="k", lw=0.8)
+    ax.set_xlabel("Trade return %")
+    ax.set_ylabel("Number of trades")
+    ax.set_title(f"Per-Trade P&L (%)   n={len(rets)}")
+    _style(ax)
+    fig.tight_layout(); return fig
+
+
+def build_holding_period_hist(results, compare=None):
+    """Histogram of holding period per trade (days)."""
+    fig, ax = plt.subplots(figsize=(10, 4))
+    df = results.closed_trades()
+    if df.empty or df["duration_days"].dropna().empty:
+        _no_trades(ax, "Holding Period per Trade")
+        fig.tight_layout(); return fig
+    days = df["duration_days"].dropna()
+    ax.hist(days, bins=30, color=SERIES_COLORS[2], alpha=0.85)
+    ax.set_xlabel("Holding period (days)")
+    ax.set_ylabel("Number of trades")
+    ax.set_title(f"Holding Period per Trade   median {days.median():.0f}d")
+    _style(ax)
+    fig.tight_layout(); return fig
+
+
+def build_trades_per_month(results, compare=None):
+    """Bar chart of trades opened vs closed per month."""
+    fig, ax = plt.subplots(figsize=(10, 4))
+    df = results.closed_trades()
+    if df.empty:
+        _no_trades(ax, "Trades per Month")
+        fig.tight_layout(); return fig
+    opens = df["entry_time"].dropna().dt.to_period("M").value_counts()
+    closes = df["exit_time"].dropna().dt.to_period("M").value_counts()
+    months = sorted(set(opens.index) | set(closes.index))
+    x = np.arange(len(months))
+    w = 0.4
+    ax.bar(x - w/2, [opens.get(m, 0) for m in months], w,
+           color=PRIMARY, label="Opened")
+    ax.bar(x + w/2, [closes.get(m, 0) for m in months], w,
+           color=SECOND, label="Closed")
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(m) for m in months], rotation=45, fontsize=7, ha="right")
+    ax.set_ylabel("Number of trades")
+    ax.set_title("Trades Opened vs Closed per Month")
+    ax.legend()
+    _style(ax)
+    fig.tight_layout(); return fig
+
+
+def build_positions_over_time(results, compare=None):
+    """Line (step) chart of concurrent open positions over time."""
+    fig, ax = plt.subplots(figsize=(10, 4))
+    df = results.closed_trades()
+    if df.empty:
+        _no_trades(ax, "Open Positions Over Time")
+        fig.tight_layout(); return fig
+    events = []
+    for _, r in df.iterrows():
+        if pd.notna(r["entry_time"]):
+            events.append((r["entry_time"], 1))
+        if pd.notna(r["exit_time"]):
+            events.append((r["exit_time"], -1))
+    if not events:
+        _no_trades(ax, "Open Positions Over Time")
+        fig.tight_layout(); return fig
+    ev = pd.DataFrame(events, columns=["t", "d"]).sort_values("t")
+    ev["open"] = ev["d"].cumsum()
+    ax.step(ev["t"], ev["open"], where="post", color=PRIMARY, lw=1.4)
+    ax.fill_between(ev["t"], ev["open"], step="post", alpha=0.15, color=PRIMARY)
+    ax.set_ylabel("Open positions")
+    ax.set_title(f"Open Positions Over Time   peak {int(ev['open'].max())}")
+    _style(ax)
+    fig.tight_layout(); return fig
+
+
+def build_top_bottom_trades(results, compare=None, n=10):
+    """Two tables: top n and bottom n trades by return."""
+    df = results.closed_trades()
+    fig = plt.figure(figsize=(10, 7))
+    if df.empty or df["return_pct"].dropna().empty:
+        ax = fig.add_subplot(111)
+        _no_trades(ax, "Top / Bottom Trades")
+        fig.tight_layout(); return fig
+
+    d = df.dropna(subset=["return_pct"]).copy().sort_values("return_pct", ascending=False)
+    top = d.head(n)
+    bottom = d.tail(n).sort_values("return_pct")
+
+    def _rows(frame):
+        out = []
+        for _, r in frame.iterrows():
+            out.append([
+                str(r["ticker"]),
+                r["entry_time"].strftime("%Y-%m-%d") if pd.notna(r["entry_time"]) else "-",
+                f"{r['entry_price']:.2f}" if r["entry_price"] is not None else "-",
+                r["exit_time"].strftime("%Y-%m-%d") if pd.notna(r["exit_time"]) else "-",
+                f"{r['exit_price']:.2f}" if r["exit_price"] is not None else "-",
+                f"{r['return_pct']*100:+.1f}%",
+            ])
+        return out
+
+    cols = ["Ticker", "Open", "Open $", "Close", "Close $", "Return"]
+
+    def _draw_table(ax, title, rows):
+        ax.axis("off")
+        ax.set_title(title, fontsize=12, fontweight="bold", color=NAVY, loc="left")
+        tbl = ax.table(cellText=rows, colLabels=cols, loc="center", cellLoc="center")
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(8)
+        tbl.scale(1, 1.3)
+        for (rr, cc), cell in tbl.get_celld().items():
+            cell.set_edgecolor(GRID)
+            if rr == 0:
+                cell.set_facecolor(NAVY)
+                cell.set_text_props(color="white", fontweight="bold")
+
+    ax1 = fig.add_subplot(211)
+    _draw_table(ax1, f"Top {len(top)} Trades by Return", _rows(top))
+    ax2 = fig.add_subplot(212)
+    _draw_table(ax2, f"Bottom {len(bottom)} Trades by Return", _rows(bottom))
+    fig.tight_layout(); return fig
+
+
 # ----------------------------------------------------------------- registry
 # key -> (label, builder, supports_compare)
 CHART_REGISTRY = {
@@ -212,6 +353,11 @@ CHART_REGISTRY = {
     "monthly_hist":   ("Monthly return histogram", build_monthly_returns_hist, True),
     "monthly_heatmap": ("Monthly returns heatmap", build_monthly_heatmap,    False),
     "rolling_sharpe": ("Rolling 12m Sharpe",      build_rolling_sharpe,      True),
+    "trade_pnl_hist": ("Trade P&L histogram",     build_trade_pnl_hist,      False),
+    "holding_period_hist": ("Holding period histogram", build_holding_period_hist, False),
+    "trades_per_month": ("Trades per month",      build_trades_per_month,    False),
+    "positions_over_time": ("Positions over time", build_positions_over_time, False),
+    "top_bottom_trades": ("Top/bottom 10 trades", build_top_bottom_trades,   False),
 }
 
 

@@ -26,6 +26,7 @@ Public API:
 from __future__ import annotations
 import json
 import io
+import re
 import numpy as np
 import pandas as pd
 
@@ -113,6 +114,75 @@ class BacktestResults:
         if eq.empty:
             return eq
         return eq.resample(freq).last().pct_change().dropna()
+
+    # ---------------- closed trades ----------------
+    @staticmethod
+    def _duration_to_days(s):
+        """Parse a .NET TimeSpan string ('89.23:00:00', '5:30:00') to days."""
+        if s is None:
+            return np.nan
+        if isinstance(s, (int, float)):
+            return float(s)
+        s = str(s).strip()
+        neg = s.startswith("-")
+        s = s.lstrip("-")
+        m = re.match(r"^(?:(\d+)\.)?(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?$", s)
+        if not m:
+            try:
+                return float(s)
+            except ValueError:
+                return np.nan
+        days = int(m.group(1) or 0)
+        hh, mm, ss = int(m.group(2)), int(m.group(3)), int(m.group(4))
+        total = days + hh / 24 + mm / 1440 + ss / 86400
+        if m.group(5):
+            total += float("0." + m.group(5)) / 86400
+        return -total if neg else total
+
+    def closed_trades(self) -> pd.DataFrame:
+        """Return QC's closed trades as a tidy DataFrame, or empty if absent.
+
+        Columns: ticker, direction, quantity, entry_time, entry_price,
+        exit_time, exit_price, pnl, fees, return_pct, duration_days, is_win.
+        return_pct is profit/loss over entry notional, so it is sign-correct
+        for both long and short trades.
+        """
+        ct = (self.raw.get("totalPerformance") or {}).get("closedTrades")
+        if not ct:
+            return pd.DataFrame()
+        rows = []
+        for t in ct:
+            sym = t.get("symbol") or {}
+            if isinstance(sym, dict):
+                ticker = sym.get("value") or sym.get("permtick") or str(sym.get("id", "?"))
+            else:
+                ticker = str(sym)
+            ep = t.get("entryPrice")
+            xp = t.get("exitPrice")
+            qty = t.get("quantity") or 0
+            pnl = t.get("profitLoss")
+            notional = (ep or 0) * abs(qty)
+            ret = (pnl / notional) if (notional and pnl is not None) else np.nan
+            rows.append({
+                "ticker": ticker,
+                "direction": "Short" if t.get("direction") == 1 else "Long",
+                "quantity": qty,
+                "entry_time": pd.to_datetime(t.get("entryTime"), utc=True, errors="coerce"),
+                "entry_price": ep,
+                "exit_time": pd.to_datetime(t.get("exitTime"), utc=True, errors="coerce"),
+                "exit_price": xp,
+                "pnl": pnl,
+                "fees": t.get("totalFees"),
+                "return_pct": ret,
+                "duration_days": self._duration_to_days(t.get("duration")),
+                "is_win": t.get("isWin"),
+            })
+        df = pd.DataFrame(rows)
+        # drop timezone so these line up cleanly with other (naive) series
+        for c in ("entry_time", "exit_time"):
+            if c in df and pd.api.types.is_datetime64tz_dtype(df[c]):
+                df[c] = df[c].dt.tz_localize(None)
+        return df.sort_values("entry_time").reset_index(drop=True)
 
     # ---------------- stats ----------------
     def statistics(self) -> dict:
