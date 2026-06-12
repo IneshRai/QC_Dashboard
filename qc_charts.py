@@ -320,7 +320,16 @@ def build_trades_per_month(results, compare=None):
 
 
 def build_positions_over_time(results, compare=None):
-    """Line (step) chart of concurrent open positions over time."""
+    """Daily count of concurrent open positions over time.
+
+    Each trade contributes a +1 at entry and a -1 at exit. Naively cumulating
+    these event-by-event produces deep false 'spikes' on rebalance days, when
+    many positions close and reopen at the same instant: the running total
+    dives on the closes and leaps back on the opens, an artifact of plotting
+    order rather than a real swing. To avoid that we (1) net all events that
+    share a timestamp into a single change, then (2) report the END-OF-DAY
+    count, which is the meaningful 'how many were held that day' figure.
+    """
     fig, ax = plt.subplots(figsize=(10, 4))
     df = results.closed_trades()
     if df.empty:
@@ -335,12 +344,22 @@ def build_positions_over_time(results, compare=None):
     if not events:
         _no_trades(ax, "Open Positions Over Time")
         fig.tight_layout(); return fig
-    ev = pd.DataFrame(events, columns=["t", "d"]).sort_values("t")
-    ev["open"] = ev["d"].cumsum()
-    ax.step(ev["t"], ev["open"], where="post", color=PRIMARY, lw=1.4)
-    ax.fill_between(ev["t"], ev["open"], step="post", alpha=0.15, color=PRIMARY)
-    ax.set_ylabel("Open positions")
-    ax.set_title(f"Open Positions Over Time   peak {int(ev['open'].max())}")
+
+    ev = pd.DataFrame(events, columns=["t", "d"])
+    # (1) net simultaneous opens/closes so same-instant churn can't create a
+    #     spurious down-then-up spike.
+    netted = ev.groupby("t", as_index=False)["d"].sum().sort_values("t")
+    netted["open"] = netted["d"].cumsum()
+    # (2) collapse to one reading per day (end-of-day level), forward-filling
+    #     days with no events so the line stays continuous.
+    s = netted.set_index("t")["open"]
+    daily = s.resample("D").last().ffill()
+
+    ax.step(daily.index, daily.values, where="post", color=PRIMARY, lw=1.4)
+    ax.fill_between(daily.index, daily.values, step="post", alpha=0.15,
+                    color=PRIMARY)
+    ax.set_ylabel("Open positions (end of day)")
+    ax.set_title(f"Open Positions Over Time   peak {int(daily.max())}")
     _style(ax)
     fig.tight_layout(); return fig
 
