@@ -66,6 +66,15 @@ def build_equity_curve(results, compare=None, log_scale=True, show_benchmark=Tru
 
     if log_scale:
         ax.set_yscale("log")
+        # Format log ticks as plain numbers (100, 1000) rather than mathtext
+        # exponents (10^2). Some matplotlib builds fail to parse the mathtext
+        # tick labels, so avoiding mathtext entirely keeps this robust across
+        # Python/matplotlib versions.
+        from matplotlib.ticker import ScalarFormatter, NullFormatter
+        sf = ScalarFormatter()
+        sf.set_scientific(False)
+        ax.yaxis.set_major_formatter(sf)
+        ax.yaxis.set_minor_formatter(NullFormatter())
     ax.set_ylabel("Growth of 100" + (" (log)" if log_scale else ""))
     ax.set_title("Equity Curve")
     ax.legend()
@@ -213,18 +222,54 @@ def _no_trades(ax, title):
 
 
 def build_trade_pnl_hist(results, compare=None):
-    """Histogram of per-trade return (%)."""
+    """Histogram of per-trade return (%).
+
+    A handful of extreme outliers (e.g. a +900% trade) otherwise stretch the
+    x-axis to several hundred percent, collapsing the bulk of trades into one
+    or two bars -- and the outlier bars themselves are only ~1 trade tall, so
+    they're invisible against a y-axis in the thousands. We focus the view on
+    the 1st-99th percentile range with fine bins, and FOLD outliers into
+    clearly-labelled overflow bins at each edge so no trade is dropped.
+    """
     fig, ax = plt.subplots(figsize=(10, 4))
     df = results.closed_trades()
     if df.empty or df["return_pct"].dropna().empty:
         _no_trades(ax, "Per-Trade P&L (%)")
         fig.tight_layout(); return fig
     rets = df["return_pct"].dropna() * 100
-    ax.hist(rets, bins=30, color=PRIMARY, alpha=0.8)
+
+    # Robust display window so a few outliers don't dominate the axis.
+    lo, hi = np.percentile(rets, [1, 99])
+    if hi <= lo:                       # all returns ~equal: fall back to full range
+        lo, hi = rets.min(), rets.max()
+    pad = (hi - lo) * 0.05 or 1.0
+    lo, hi = lo - pad, hi + pad
+
+    n_below = int((rets < lo).sum())
+    n_above = int((rets > hi).sum())
+    # Fold outliers into the edge bins so every trade is still counted/visible.
+    clipped = rets.clip(lo, hi)
+    ax.hist(clipped, bins=60, range=(lo, hi), color=PRIMARY, alpha=0.8)
     ax.axvline(0, color="k", lw=0.8)
+    ax.set_xlim(lo, hi)
     ax.set_xlabel("Trade return %")
     ax.set_ylabel("Number of trades")
     ax.set_title(f"Per-Trade P&L (%)   n={len(rets)}")
+
+    # Annotate the overflow bins so the folded edge bars aren't misread as
+    # genuine counts at exactly lo/hi.
+    ymax = ax.get_ylim()[1]
+    if n_above:
+        ax.annotate(f"{n_above} trades > {hi:.0f}%\n(max {rets.max():.0f}%)",
+                    xy=(hi, 0), xytext=(hi, ymax * 0.6),
+                    ha="right", va="center", fontsize=8, color=SLATE,
+                    arrowprops=dict(arrowstyle="->", color=SLATE, lw=0.8))
+    if n_below:
+        ax.annotate(f"{n_below} trades < {lo:.0f}%\n(min {rets.min():.0f}%)",
+                    xy=(lo, 0), xytext=(lo, ymax * 0.6),
+                    ha="left", va="center", fontsize=8, color=SLATE,
+                    arrowprops=dict(arrowstyle="->", color=SLATE, lw=0.8))
+
     _style(ax)
     fig.tight_layout(); return fig
 
