@@ -565,12 +565,17 @@ def _invested_composition(exp):
     fig, ax = plt.subplots(figsize=(10, 4.5))
     net_all = (exp["net"] * 100).clip(lower=0)          # equity invested
 
-    # Trim leading/trailing days where the book isn't really deployed yet (a
-    # startup ramp sitting near 0%), so it doesn't drag the auto-zoom down to 0.
-    med = float(net_all.median())
-    active = net_all > max(5.0, 0.5 * med)
-    if active.any():
-        net_pct = net_all.loc[active.idxmax():active[::-1].idxmax()]
+    # On a LONG backtest, trim the leading/trailing days where the book isn't
+    # really deployed yet (a startup ramp at ~0%), so one 0% day doesn't force
+    # the y-axis to span 0-100% and crush the data. On a SHORT run (a few weeks)
+    # the early cash period is often the whole point, so keep every day.
+    TRIM_MIN_DAYS = 90
+    span_days = (net_all.index[-1] - net_all.index[0]).days if len(net_all) > 1 else 0
+    if span_days >= TRIM_MIN_DAYS:
+        med = float(net_all.median())
+        active = net_all > max(5.0, 0.5 * med)
+        net_pct = net_all.loc[active.idxmax():active[::-1].idxmax()] \
+            if active.any() else net_all
     else:
         net_pct = net_all
     idx = net_pct.index
