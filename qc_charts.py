@@ -563,9 +563,18 @@ def build_invested_level(results, compare=None):
 def _invested_composition(exp):
     """Clean cash-vs-equity composition for a long, un-levered book."""
     fig, ax = plt.subplots(figsize=(10, 4.5))
-    idx = exp.index
-    net_pct = (exp["net"] * 100).clip(lower=0)      # equity invested
-    cash_pct = 100 - net_pct                        # dry powder, >= 0 here
+    net_all = (exp["net"] * 100).clip(lower=0)          # equity invested
+
+    # Trim leading/trailing days where the book isn't really deployed yet (a
+    # startup ramp sitting near 0%), so it doesn't drag the auto-zoom down to 0.
+    med = float(net_all.median())
+    active = net_all > max(5.0, 0.5 * med)
+    if active.any():
+        net_pct = net_all.loc[active.idxmax():active[::-1].idxmax()]
+    else:
+        net_pct = net_all
+    idx = net_pct.index
+    cash_pct = 100 - net_pct                            # dry powder, >= 0 here
     avg_net = float(net_pct.mean())
     avg_cash = float(cash_pct.mean())
 
@@ -579,10 +588,32 @@ def _invested_composition(exp):
     ax.axhline(100, color=SLATE, lw=1.0, ls=":", alpha=0.7)
     ax.axhline(avg_net, color=NAVY, lw=1.0, ls="--", alpha=0.6)
 
-    # Zoom to where the data lives so the bands and variation are legible; keep
-    # 100% on screen as the natural ceiling.
-    lo = max(0.0, float(net_pct.min()) - 4)
-    ax.set_ylim(lo, 101.5)
+    # Auto-zoom to where the data lives. Use a low percentile (not the raw min)
+    # for the floor so the occasional deep de-risk day doesn't reset the scale,
+    # but never hide the genuine minimum: floor just below whichever is lower.
+    p_lo = float(np.percentile(net_pct, 1))
+    floor = max(0.0, min(p_lo, float(net_pct.min())) - 4)
+    # Guard against a degenerate all-flat series (floor == ceiling).
+    if floor >= 99:
+        floor = max(0.0, avg_net - 6)
+    ax.set_ylim(floor, 101.5)
+
+    # Label the bands directly instead of a legend swatch.
+    ax.text(0.012, 0.06, f"Equity invested — avg {avg_net:.1f}%",
+            transform=ax.transAxes, color="white", fontsize=9.5,
+            fontweight="bold", va="bottom",
+            bbox=dict(boxstyle="round,pad=0.3", fc=GREEN_DARK, ec="none", alpha=0.9))
+    ax.text(0.012, 0.93, f"Cash — avg {avg_cash:.1f}%",
+            transform=ax.transAxes, color=NAVY, fontsize=9.5, fontweight="bold",
+            va="top",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=SLATE, alpha=0.9))
+
+    ax.set_ylabel("% of portfolio value")
+    ax.set_title(f"Invested Level (Cash vs Equity)   "
+                 f"avg {avg_net:.0f}% invested / {avg_cash:.0f}% cash")
+    ax.legend(loc="lower right", fontsize=8, framealpha=0.85, facecolor="white")
+    _style(ax)
+    fig.tight_layout(); return fig
 
     # Label the bands directly instead of a legend swatch.
     ax.text(0.012, 0.06, f"Equity invested — avg {avg_net:.1f}%",
