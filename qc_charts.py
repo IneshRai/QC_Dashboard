@@ -304,17 +304,14 @@ def build_trade_pnl_hist(results, compare=None):
     ax.set_ylabel("Number of trades")
     ax.set_title(f"Per-Trade P&L (%)   n={len(rets)}")
 
-    # Mean and median markers (dotted verticals). Computed on the FULL set of
-    # returns, not the clipped view, so outliers still pull them honestly. If a
-    # marker falls outside the display window it's clamped to the edge and the
-    # label still reports its true value.
+    # Mean and median markers (bold, labelled verticals). Computed on the FULL
+    # set of returns, not the clipped view, so outliers still pull them
+    # honestly. Markers are clamped into the display window if they fall outside.
     mean_v = float(rets.mean())
     median_v = float(rets.median())
-    for value, color, name in ((mean_v, NAVY, "Mean"), (median_v, SECOND, "Median")):
-        xpos = min(max(value, lo), hi)
-        ax.axvline(xpos, color=color, lw=1.4, ls=":",
-                   label=f"{name} {value:+.1f}%")
-    ax.legend(loc="upper right", fontsize=8)
+    _mark_mean_median(ax, mean_v, median_v,
+                      f"Mean {mean_v:+.1f}%", f"Median {median_v:+.1f}%",
+                      clamp=(lo, hi))
 
     # Annotate the overflow bins so the folded edge bars aren't misread as
     # genuine counts at exactly lo/hi.
@@ -475,9 +472,46 @@ def build_top_bottom_trades(results, compare=None, n=10):
 # ------------------------------------------------- portfolio composition
 def _empty_panel(ax, title, msg):
     ax.text(0.5, 0.5, msg, ha="center", va="center",
-            transform=ax.transAxes, color=SLATE, wrap=True)
+            transform=ax.transAxes, color=SLATE, wrap=True, fontsize=10)
     ax.set_title(title)
-    _style(ax)
+    ax.set_xticks([]); ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.grid(False)
+
+
+def _mark_mean_median(ax, mean_v, median_v, mean_txt, median_txt, clamp=None):
+    """Draw bold, clearly-labelled mean & median vertical lines on a histogram.
+
+    Lines use contrasting colors that read against both navy bars and green
+    fills, full opacity, and a boxed label near the top so the markers don't get
+    lost. Values are clamped into `clamp` (lo, hi) for drawing but the label
+    still shows the true number.
+    """
+    trans = ax.get_xaxis_transform()      # x in data coords, y in axes coords
+    lo, hi = (clamp if clamp else (None, None))
+
+    def _x(v):
+        if clamp:
+            return min(max(v, lo), hi)
+        return v
+
+    for value, color, dashes, yfrac, txt in (
+        (mean_v, "#B0563C", (6, 3), 0.95, mean_txt),
+        (median_v, GREEN, (2, 2), 0.82, median_txt),
+    ):
+        x = _x(value)
+        ax.axvline(x, color=color, lw=2.6, dashes=dashes, alpha=0.95, zorder=6)
+        # Put the label on whichever side has room.
+        right_edge = hi if clamp else ax.get_xlim()[1]
+        left_edge = lo if clamp else ax.get_xlim()[0]
+        near_right = (x - left_edge) > 0.7 * (right_edge - left_edge)
+        ha = "right" if near_right else "left"
+        pad = " " if ha == "left" else "  "
+        ax.text(x, yfrac, f"{pad}{txt}", transform=trans, color="white",
+                fontsize=9, fontweight="bold", ha=ha, va="top", zorder=7,
+                bbox=dict(boxstyle="round,pad=0.28", fc=color, ec="none",
+                          alpha=0.95))
 
 
 def build_invested_level(results, compare=None):
@@ -503,15 +537,33 @@ def build_invested_level(results, compare=None):
     short_pct = exp["short"] * 100
     net_pct = exp["net"] * 100
     cash_pct = exp["cash"] * 100
+    has_short = bool((short_pct < -0.05).any())
+    has_margin = bool((long_pct > 100.5).any())
 
-    ax.fill_between(idx, 0, long_pct, color=GREEN, alpha=0.45, label="Long")
-    if (short_pct < 0).any():
-        ax.fill_between(idx, short_pct, 0, color="#B0563C", alpha=0.40, label="Short")
-    ax.plot(idx, net_pct, color=NAVY, lw=1.4, label="Net invested")
-    ax.plot(idx, cash_pct, color=SLATE, lw=1.2, ls="--", label="Cash")
+    # Invested (long) as a solid green area; the slim band from the top of the
+    # green up to 100% is cash, so a normal long book reads as one clean stack.
+    ax.fill_between(idx, 0, long_pct, color=GREEN, alpha=0.55, lw=0, label="Long")
+    ax.fill_between(idx, long_pct, 100, where=(long_pct <= 100), color=SLATE,
+                    alpha=0.18, lw=0, label="Cash", interpolate=True)
+    if has_short:
+        ax.fill_between(idx, short_pct, 0, color="#B0563C", alpha=0.40, lw=0,
+                        label="Short")
+
+    # Cash line: only worth drawing as its own line when the book goes on margin
+    # or short (cash leaves the simple 0-100 band); otherwise the band says it.
+    if has_margin or has_short:
+        ax.plot(idx, cash_pct, color=SLATE, lw=1.3, ls="--", label="Cash line")
+    # Net line only adds information when shorts make net differ from long.
+    if has_short:
+        ax.plot(idx, net_pct, color=NAVY, lw=1.4, label="Net invested")
 
     ax.axhline(0, color="k", lw=0.8)
-    ax.axhline(100, color=SLATE, lw=0.8, ls=":", alpha=0.7)
+    ax.axhline(100, color=NAVY, lw=1.0, ls=":", alpha=0.6)
+
+    # y-limits with a little headroom, accommodating margin/short excursions.
+    ymin = min(0.0, float(short_pct.min()), float(cash_pct.min())) - 5
+    ymax = max(105.0, float(long_pct.max())) + 5
+    ax.set_ylim(ymin, ymax)
 
     avg_net = float(net_pct.mean())
     avg_gross = float((exp["gross"] * 100).mean())
@@ -519,7 +571,8 @@ def build_invested_level(results, compare=None):
     ax.set_ylabel("% of portfolio value")
     ax.set_title(f"Invested Level (Cash vs Equity)   "
                  f"avg net {avg_net:.0f}% / gross {avg_gross:.0f}% / cash {avg_cash:.0f}%")
-    ax.legend(loc="best", fontsize=8, ncol=2)
+    ax.legend(loc="lower left", fontsize=8, ncol=2, framealpha=0.85,
+              facecolor="white")
     _style(ax)
     fig.tight_layout(); return fig
 
@@ -553,15 +606,15 @@ def build_execution_time_hist(results, compare=None):
                      "fill timestamps recorded).")
         fig.tight_layout(); return fig
 
-    # Everything filled in the same instant -> single spike at 0.
+    # Everything filled in the same instant -> not a distribution. Say so
+    # clearly instead of drawing a single full-width bar that looks broken.
     if float(lat.max()) <= 0:
-        ax.bar([0], [len(lat)], width=0.6, color=PRIMARY, alpha=0.85)
-        ax.set_xticks([0]); ax.set_xticklabels(["0"])
-        ax.set_xlabel("Execution time (seconds)")
-        ax.set_ylabel("Number of orders")
-        ax.set_title(f"Order Execution Time   n={len(lat)}   "
-                     f"all fills immediate (0s)")
-        _style(ax)
+        _empty_panel(
+            ax, "Order Execution Time",
+            f"All {len(lat):,} orders filled in the same instant they were "
+            f"submitted (0s latency).\nThat's normal for market orders in a "
+            f"backtest. Use limit/stop orders or intraday\nresolution to see a "
+            f"spread of execution times here.")
         fig.tight_layout(); return fig
 
     # Pick a unit from the 95th percentile so a few long-resting orders don't
@@ -580,9 +633,9 @@ def build_execution_time_hist(results, compare=None):
 
     mean_v = float(vals.mean())
     median_v = float(vals.median())
-    for value, color, name in ((mean_v, NAVY, "Mean"), (median_v, SECOND, "Median")):
-        ax.axvline(min(value, hi), color=color, lw=1.4, ls=":",
-                   label=f"{name} {value:.2f} {unit}")
+    _mark_mean_median(ax, mean_v, median_v,
+                      f"Mean {mean_v:.2f} {unit}", f"Median {median_v:.2f} {unit}",
+                      clamp=(0, hi))
 
     ax.set_xlim(0, hi)
     ax.set_xlabel(f"Execution time ({unit})")
@@ -594,7 +647,6 @@ def build_execution_time_hist(results, compare=None):
                     xy=(hi, 0), xytext=(hi, ymax * 0.6),
                     ha="right", va="center", fontsize=8, color=SLATE,
                     arrowprops=dict(arrowstyle="->", color=SLATE, lw=0.8))
-    ax.legend(loc="upper right", fontsize=8)
     _style(ax)
     fig.tight_layout(); return fig
 
