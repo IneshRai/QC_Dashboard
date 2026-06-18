@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from qc_brand import (PRIMARY_COLOR, COMPARE_COLOR, SERIES_COLORS, SLATE,
-                      NAVY, GRID, apply_mpl_theme)
+                      NAVY, GREEN, GRID, apply_mpl_theme)
 
 # Apply Castellan styling to every figure built in this module.
 apply_mpl_theme()
@@ -117,28 +117,47 @@ def build_monthly_returns_hist(results, compare=None):
     return fig
 
 
-def build_annual_returns(results, compare=None):
+def build_annual_returns(results, compare=None, show_benchmark=True):
+    """Grouped annual-return bars: strategy, optional comparison run, and the
+    benchmark side-by-side for each year (benchmark shown when present).
+
+    Bars are grouped per calendar year so strategy vs benchmark is easy to read.
+    Years are computed the same way for every series (year-end resample), so the
+    comparison is apples-to-apples.
+    """
     fig, ax = plt.subplots(figsize=(10, 4))
-    yr = (results.returns("YE") * 100)
-    yr.index = yr.index.year
-    x = np.arange(len(yr))
-    width = 0.4 if compare is not None else 0.7
-    ax.bar(x - (width/2 if compare is not None else 0), yr.values, width,
-           color=PRIMARY, label=results.name)
+
+    # Assemble the series we actually have, each as {year: return%}.
+    groups = [(results.name, results.returns("YE") * 100, PRIMARY)]
     if compare is not None:
-        yr2 = (compare.returns("YE") * 100)
-        yr2.index = yr2.index.year
-        # align years
-        allyrs = sorted(set(yr.index) | set(yr2.index))
-        ax.clear()
-        x = np.arange(len(allyrs))
-        v1 = [yr.get(y, np.nan) for y in allyrs]
-        v2 = [yr2.get(y, np.nan) for y in allyrs]
-        ax.bar(x - width/2, v1, width, color=PRIMARY, label=results.name)
-        ax.bar(x + width/2, v2, width, color=SECOND, label=compare.name)
-        ax.set_xticks(x); ax.set_xticklabels(allyrs, rotation=45, fontsize=7)
-    else:
-        ax.set_xticks(x); ax.set_xticklabels(yr.index, rotation=45, fontsize=7)
+        groups.append((compare.name, compare.returns("YE") * 100, SECOND))
+    if show_benchmark:
+        bm = results.benchmark_returns("YE") * 100
+        if not bm.empty:
+            groups.append(("Benchmark", bm, BENCHMARK_COLOR))
+
+    # Re-key each series by integer year.
+    keyed = []
+    for label, s, color in groups:
+        s = s.copy()
+        if not s.empty:
+            s.index = s.index.year
+        keyed.append((label, s, color))
+
+    all_years = sorted(set().union(*[set(s.index) for _, s, _ in keyed if not s.empty])) \
+        if any(not s.empty for _, s, _ in keyed) else []
+    x = np.arange(len(all_years))
+
+    n = max(1, len(keyed))
+    total_width = 0.8
+    bw = total_width / n
+    for i, (label, s, color) in enumerate(keyed):
+        offset = (i - (n - 1) / 2) * bw
+        vals = [s.get(y, np.nan) for y in all_years]
+        ax.bar(x + offset, vals, bw, color=color, label=label)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(all_years, rotation=45, fontsize=7)
     ax.axhline(0, color="k", lw=0.8)
     ax.set_ylabel("Annual return %")
     ax.set_title("Annual Returns")
@@ -175,18 +194,47 @@ _HEAT_CMAP = matplotlib.colors.LinearSegmentedColormap.from_list(
 
 def build_monthly_heatmap(results, compare=None):
     """Calendar heatmap of monthly returns (years x months)."""
-    import calendar
     rm = results.returns("ME") * 100
-    fig, ax = plt.subplots(figsize=(10, max(2.2, 0.5 * 0 + 0.55 *
-                           max(1, len(set(rm.index.year)))) + 1.2))
-    if rm.empty:
-        ax.text(0.5, 0.5, "Not enough data for a monthly heatmap",
-                ha="center", va="center", transform=ax.transAxes, color=SLATE)
-        ax.set_title("Monthly Returns (%)")
+    return _heatmap_figure(rm, "Monthly Returns (%)")
+
+
+def build_monthly_excess_heatmap(results, compare=None):
+    """Calendar heatmap of monthly EXCESS returns: strategy% - benchmark%.
+
+    Aligns each month's strategy return against the benchmark's return for the
+    same month and plots the difference, so green = outperformed the benchmark
+    that month, red = lagged it. Needs a benchmark series in the file.
+    """
+    s = results.returns("ME")
+    b = results.benchmark_returns("ME")
+    if b.empty:
+        return _heatmap_figure(pd.Series(dtype=float),
+                               "Monthly Excess Returns vs Benchmark (%)",
+                               empty_msg="No benchmark series in this file, so "
+                                         "excess returns can't be computed.")
+    # Align on shared month-ends; subtraction lines up on the index.
+    excess = (s - b).dropna() * 100
+    return _heatmap_figure(excess, "Monthly Excess Returns vs Benchmark (%)")
+
+
+def _heatmap_figure(rm_pct, title, empty_msg="Not enough data for a monthly heatmap"):
+    """Build a year x month heatmap figure from a month-end %-returns Series.
+
+    Shared by the plain monthly heatmap and the excess-vs-benchmark version so
+    the styling (Castellan diverging colormap, cell annotations, sizing) stays
+    in one place.
+    """
+    import calendar
+    n_years = max(1, len(set(rm_pct.index.year))) if not rm_pct.empty else 1
+    fig, ax = plt.subplots(figsize=(10, max(2.2, 0.55 * n_years) + 1.2))
+    if rm_pct.empty:
+        ax.text(0.5, 0.5, empty_msg, ha="center", va="center",
+                transform=ax.transAxes, color=SLATE)
+        ax.set_title(title)
         ax.axis("off")
         fig.tight_layout()
         return fig
-    df = rm.to_frame("ret")
+    df = rm_pct.to_frame("ret")
     df["year"] = df.index.year
     df["month"] = df.index.month
     grid = df.pivot_table(index="year", columns="month", values="ret")
@@ -206,7 +254,7 @@ def build_monthly_heatmap(results, compare=None):
             if v == v:  # not NaN
                 ax.text(c, r, f"{v:.1f}", ha="center", va="center",
                         fontsize=7, color="#1A3A5C")
-    ax.set_title("Monthly Returns (%)")
+    ax.set_title(title)
     ax.grid(False)
     fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
     fig.tight_layout()
@@ -255,6 +303,18 @@ def build_trade_pnl_hist(results, compare=None):
     ax.set_xlabel("Trade return %")
     ax.set_ylabel("Number of trades")
     ax.set_title(f"Per-Trade P&L (%)   n={len(rets)}")
+
+    # Mean and median markers (dotted verticals). Computed on the FULL set of
+    # returns, not the clipped view, so outliers still pull them honestly. If a
+    # marker falls outside the display window it's clamped to the edge and the
+    # label still reports its true value.
+    mean_v = float(rets.mean())
+    median_v = float(rets.median())
+    for value, color, name in ((mean_v, NAVY, "Mean"), (median_v, SECOND, "Median")):
+        xpos = min(max(value, lo), hi)
+        ax.axvline(xpos, color=color, lw=1.4, ls=":",
+                   label=f"{name} {value:+.1f}%")
+    ax.legend(loc="upper right", fontsize=8)
 
     # Annotate the overflow bins so the folded edge bars aren't misread as
     # genuine counts at exactly lo/hi.
@@ -412,6 +472,133 @@ def build_top_bottom_trades(results, compare=None, n=10):
     fig.tight_layout(); return fig
 
 
+# ------------------------------------------------- portfolio composition
+def _empty_panel(ax, title, msg):
+    ax.text(0.5, 0.5, msg, ha="center", va="center",
+            transform=ax.transAxes, color=SLATE, wrap=True)
+    ax.set_title(title)
+    _style(ax)
+
+
+def build_invested_level(results, compare=None):
+    """Portfolio composition over time: how much of portfolio value is invested
+    (long and short) vs held in cash, as a fraction of total portfolio value.
+
+    Long exposure fills upward (green), short exposure fills downward (red), and
+    a cash line tracks 1 - net exposure. This handles leverage (long area pushes
+    above the 100% line and the cash line dips below 0) and net-short books (cash
+    line rises above 100%), so it stays meaningful if the strategy ever trades on
+    margin. Built from QC's 'Exposure' chart.
+    """
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    exp = results.exposure()
+    if exp.empty:
+        _empty_panel(ax, "Invested Level (Cash vs Equity)",
+                     "No 'Exposure' chart in this file. Re-run the backtest on a "
+                     "recent LEAN/QuantConnect version to record exposure.")
+        fig.tight_layout(); return fig
+
+    idx = exp.index
+    long_pct = exp["long"] * 100
+    short_pct = exp["short"] * 100
+    net_pct = exp["net"] * 100
+    cash_pct = exp["cash"] * 100
+
+    ax.fill_between(idx, 0, long_pct, color=GREEN, alpha=0.45, label="Long")
+    if (short_pct < 0).any():
+        ax.fill_between(idx, short_pct, 0, color="#B0563C", alpha=0.40, label="Short")
+    ax.plot(idx, net_pct, color=NAVY, lw=1.4, label="Net invested")
+    ax.plot(idx, cash_pct, color=SLATE, lw=1.2, ls="--", label="Cash")
+
+    ax.axhline(0, color="k", lw=0.8)
+    ax.axhline(100, color=SLATE, lw=0.8, ls=":", alpha=0.7)
+
+    avg_net = float(net_pct.mean())
+    avg_gross = float((exp["gross"] * 100).mean())
+    avg_cash = float(cash_pct.mean())
+    ax.set_ylabel("% of portfolio value")
+    ax.set_title(f"Invested Level (Cash vs Equity)   "
+                 f"avg net {avg_net:.0f}% / gross {avg_gross:.0f}% / cash {avg_cash:.0f}%")
+    ax.legend(loc="best", fontsize=8, ncol=2)
+    _style(ax)
+    fig.tight_layout(); return fig
+
+
+# ------------------------------------------------- order execution timing
+def _pick_time_unit(seconds_ref):
+    """Choose a human time unit for a representative latency (in seconds).
+    Returns (divisor_to_seconds, unit_label)."""
+    if seconds_ref < 90:
+        return 1.0, "seconds"
+    if seconds_ref < 90 * 60:
+        return 60.0, "minutes"
+    if seconds_ref < 48 * 3600:
+        return 3600.0, "hours"
+    return 86400.0, "days"
+
+
+def build_execution_time_hist(results, compare=None):
+    """Distribution of order execution time: the gap between when an order is
+    submitted and when it is filled.
+
+    The x-axis unit auto-adjusts (seconds / minutes / hours / days) based on the
+    bulk of the data, so it reads well whether fills are near-instant market
+    orders or limit orders that rest for days. Mean and median are marked.
+    """
+    fig, ax = plt.subplots(figsize=(10, 4))
+    lat = results.execution_latencies()        # seconds, filled orders only
+    if lat.empty:
+        _empty_panel(ax, "Order Execution Time",
+                     "No order fill timing in this file (no orders, or no "
+                     "fill timestamps recorded).")
+        fig.tight_layout(); return fig
+
+    # Everything filled in the same instant -> single spike at 0.
+    if float(lat.max()) <= 0:
+        ax.bar([0], [len(lat)], width=0.6, color=PRIMARY, alpha=0.85)
+        ax.set_xticks([0]); ax.set_xticklabels(["0"])
+        ax.set_xlabel("Execution time (seconds)")
+        ax.set_ylabel("Number of orders")
+        ax.set_title(f"Order Execution Time   n={len(lat)}   "
+                     f"all fills immediate (0s)")
+        _style(ax)
+        fig.tight_layout(); return fig
+
+    # Pick a unit from the 95th percentile so a few long-resting orders don't
+    # force an awkward scale on the bulk of quick fills.
+    ref = float(np.percentile(lat, 95)) or float(lat.max())
+    div, unit = _pick_time_unit(ref)
+    vals = lat / div
+
+    # Robust display window with folded overflow, mirroring the P&L histogram.
+    hi = float(np.percentile(vals, 99))
+    if hi <= 0:
+        hi = float(vals.max())
+    n_above = int((vals > hi).sum())
+    clipped = vals.clip(0, hi)
+    ax.hist(clipped, bins=40, range=(0, hi), color=PRIMARY, alpha=0.85)
+
+    mean_v = float(vals.mean())
+    median_v = float(vals.median())
+    for value, color, name in ((mean_v, NAVY, "Mean"), (median_v, SECOND, "Median")):
+        ax.axvline(min(value, hi), color=color, lw=1.4, ls=":",
+                   label=f"{name} {value:.2f} {unit}")
+
+    ax.set_xlim(0, hi)
+    ax.set_xlabel(f"Execution time ({unit})")
+    ax.set_ylabel("Number of orders")
+    ax.set_title(f"Order Execution Time   n={len(lat)}")
+    if n_above:
+        ymax = ax.get_ylim()[1]
+        ax.annotate(f"{n_above} orders > {hi:.1f} {unit}\n(max {vals.max():.1f})",
+                    xy=(hi, 0), xytext=(hi, ymax * 0.6),
+                    ha="right", va="center", fontsize=8, color=SLATE,
+                    arrowprops=dict(arrowstyle="->", color=SLATE, lw=0.8))
+    ax.legend(loc="upper right", fontsize=8)
+    _style(ax)
+    fig.tight_layout(); return fig
+
+
 # ----------------------------------------------------------------- registry
 # key -> (label, builder, supports_compare)
 CHART_REGISTRY = {
@@ -420,8 +607,12 @@ CHART_REGISTRY = {
     "annual_returns": ("Annual returns",          build_annual_returns,      True),
     "monthly_hist":   ("Monthly return histogram", build_monthly_returns_hist, True),
     "monthly_heatmap": ("Monthly returns heatmap", build_monthly_heatmap,    False),
+    "monthly_excess_heatmap": ("Monthly excess returns heatmap (vs benchmark)",
+                               build_monthly_excess_heatmap,                 False),
     "rolling_sharpe": ("Rolling 12m Sharpe",      build_rolling_sharpe,      True),
+    "invested_level": ("Invested level (cash vs equity)", build_invested_level, False),
     "trade_pnl_hist": ("Trade P&L histogram",     build_trade_pnl_hist,      False),
+    "execution_time_hist": ("Order execution time", build_execution_time_hist, False),
     "holding_period_hist": ("Holding period histogram", build_holding_period_hist, False),
     "trades_per_month": ("Trades per month",      build_trades_per_month,    False),
     "positions_over_time": ("Positions over time", build_positions_over_time, False),

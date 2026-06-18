@@ -17,6 +17,10 @@ Public API:
     BacktestResults.benchmark()         -> pd.Series or None (SPY etc.)
     BacktestResults.drawdown_series()   -> pd.Series (drawdown %, <= 0)
     BacktestResults.returns(freq)       -> pd.Series of periodic returns
+    BacktestResults.benchmark_returns(freq) -> pd.Series (benchmark periodic returns)
+    BacktestResults.exposure()          -> pd.DataFrame (long/short/net/gross/cash, daily)
+    BacktestResults.orders()            -> pd.DataFrame of orders (with fill latency)
+    BacktestResults.execution_latencies() -> pd.Series of submit->fill seconds
     BacktestResults.statistics()        -> dict of QC's headline stats
     BacktestResults.computed_metrics()  -> dict of metrics we compute ourselves
     BacktestResults.list_charts()       -> list of available chart names
@@ -114,6 +118,118 @@ class BacktestResults:
         if eq.empty:
             return eq
         return eq.resample(freq).last().pct_change().dropna()
+
+    def benchmark_returns(self, freq: str = "ME") -> pd.Series:
+        """Periodic returns of the benchmark price series, same convention as
+        returns() so the two are directly comparable. Empty Series if there is
+        no benchmark in the file."""
+        bm = self.benchmark()
+        if bm is None or bm.empty:
+            return pd.Series(dtype=float)
+        return bm.resample(freq).last().pct_change().dropna()
+
+    # ---------------- exposure / invested level ----------------
+    def exposure(self) -> pd.DataFrame:
+        """Daily portfolio composition as fractions of total portfolio value.
+
+        Built from QC's 'Exposure' chart, whose series are named
+        '<SecurityType> - Long Ratio' / '<SecurityType> - Short Ratio' and hold
+        holdings_value / portfolio_value (shorts stored negative). We sum across
+        all security types to get the whole-portfolio picture.
+
+        Returns a DataFrame indexed by day with columns (all fractions of PV):
+            long   total long exposure   (>= 0; can exceed 1 on margin)
+            short  total short exposure   (<= 0)
+            net    long + short           (signed net invested)
+            gross  long - short           (total capital at work, >= 0)
+            cash   1 - net                (negative when on margin; > 1 net short)
+
+        Empty DataFrame if the file has no 'Exposure' chart (older LEAN, or a
+        backtest that never held anything).
+        """
+        series = self.chart_series("Exposure")
+        if not series:
+            return pd.DataFrame()
+        df = pd.DataFrame(series).sort_index()
+        if df.empty:
+            return pd.DataFrame()
+        # A type that isn't held at a sampled instant simply has no point there;
+        # treat that as 0 exposure rather than a gap to carry forward.
+        df = df.fillna(0.0)
+        long_cols = [c for c in df.columns if str(c).endswith("Long Ratio")]
+        short_cols = [c for c in df.columns if str(c).endswith("Short Ratio")]
+        long_sum = df[long_cols].sum(axis=1) if long_cols else pd.Series(0.0, index=df.index)
+        short_sum = df[short_cols].sum(axis=1) if short_cols else pd.Series(0.0, index=df.index)
+        out = pd.DataFrame({"long": long_sum, "short": short_sum})
+        # Collapse to one composition per day and carry it across non-sampled
+        # days (weekends/holidays) so the line stays continuous.
+        out = out.resample("D").last().ffill().dropna(how="all")
+        out["net"] = out["long"] + out["short"]
+        out["gross"] = out["long"] - out["short"]
+        out["cash"] = 1.0 - out["net"]
+        return out
+
+    # ---------------- orders / execution ----------------
+    # QC order type ids -> readable labels (Common/Orders/OrderTypes.cs)
+    _ORDER_TYPES = {
+        0: "Market", 1: "Limit", 2: "StopMarket", 3: "StopLimit",
+        4: "MarketOnOpen", 5: "MarketOnClose", 6: "OptionExercise",
+        7: "LimitIfTouched", 8: "ComboMarket", 9: "ComboLimit",
+        10: "ComboLegLimit", 11: "TrailingStop",
+    }
+
+    def orders(self) -> pd.DataFrame:
+        """All orders from the results JSON as a tidy DataFrame, or empty.
+
+        Columns: id, ticker, type (int), type_name, status (int), quantity,
+        submit_time, fill_time, latency, latency_seconds. submit_time is the
+        order's 'time' (when it was created/submitted) and fill_time is
+        'lastFillTime'; latency is the gap between them. Times are tz-naive UTC.
+        """
+        od = self.raw.get("orders") or {}
+        if not od:
+            return pd.DataFrame()
+        # 'orders' is usually a dict keyed by order id, occasionally a list.
+        items = od.values() if isinstance(od, dict) else od
+        rows = []
+        for o in items:
+            if not isinstance(o, dict):
+                continue
+            otype = o.get("type")
+            rows.append({
+                "id": o.get("id"),
+                "ticker": self._ticker_of(o.get("symbol")),
+                "type": otype,
+                "type_name": self._ORDER_TYPES.get(otype, str(otype)),
+                "status": o.get("status"),
+                "quantity": o.get("quantity"),
+                "submit_time": pd.to_datetime(o.get("time") or o.get("createdTime"),
+                                              utc=True, errors="coerce"),
+                "fill_time": pd.to_datetime(o.get("lastFillTime"),
+                                            utc=True, errors="coerce"),
+            })
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        for c in ("submit_time", "fill_time"):
+            if pd.api.types.is_datetime64tz_dtype(df[c]):
+                df[c] = df[c].dt.tz_localize(None)
+        df["latency"] = df["fill_time"] - df["submit_time"]
+        df["latency_seconds"] = df["latency"].dt.total_seconds()
+        return df
+
+    def execution_latencies(self) -> pd.Series:
+        """Submit->fill latency in SECONDS for every filled order, as a Series.
+
+        Only orders that actually filled (have a fill_time) and whose latency is
+        non-negative are included. Empty Series if there are no fills/orders.
+        """
+        df = self.orders()
+        if df.empty or "latency_seconds" not in df:
+            return pd.Series(dtype=float)
+        s = df["latency_seconds"].dropna()
+        s = s[s >= 0]
+        return s.reset_index(drop=True)
 
     # ---------------- closed trades ----------------
     @staticmethod
