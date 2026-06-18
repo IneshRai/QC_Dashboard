@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from qc_brand import (PRIMARY_COLOR, COMPARE_COLOR, SERIES_COLORS, SLATE,
-                      NAVY, GREEN, GRID, apply_mpl_theme)
+                      NAVY, GREEN, GREEN_DARK, GRID, apply_mpl_theme)
 
 # Apply Castellan styling to every figure built in this module.
 apply_mpl_theme()
@@ -514,19 +514,37 @@ def _mark_mean_median(ax, mean_v, median_v, mean_txt, median_txt, clamp=None):
                           alpha=0.95))
 
 
-def build_invested_level(results, compare=None):
-    """Portfolio composition over time: how much of portfolio value is invested
-    (long and short) vs held in cash, as a fraction of total portfolio value.
+def _padded_ylim(arrays, must_include=()):
+    """Nice padded y-limits covering the data plus any reference values that
+    must be on-screen (e.g. the 100% line, or 0 for cash)."""
+    vals = np.concatenate([np.asarray(a, dtype=float) for a in arrays]) \
+        if arrays else np.array([0.0])
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        vals = np.array([0.0])
+    lo, hi = float(vals.min()), float(vals.max())
+    for v in must_include:
+        lo, hi = min(lo, v), max(hi, v)
+    pad = max(2.0, (hi - lo) * 0.10)
+    return lo - pad, hi + pad
 
-    Long exposure fills upward (green), short exposure fills downward (red), and
-    a cash line tracks 1 - net exposure. This handles leverage (long area pushes
-    above the 100% line and the cash line dips below 0) and net-short books (cash
-    line rises above 100%), so it stays meaningful if the strategy ever trades on
-    margin. Built from QC's 'Exposure' chart.
+
+def build_invested_level(results, compare=None):
+    """How invested the portfolio is over time, split across two stacked panels:
+
+      Top  - exposure as % of portfolio value: a net-exposure line (and a gross
+             line once the book shorts or levers), with the 100% reference. The
+             y-axis auto-zooms to the data so day-to-day changes and de-risking
+             episodes are visible instead of being flattened into a solid block.
+      Bottom - cash / dry powder as % of portfolio value, on its own auto-scaled
+             axis. Goes negative when on margin and above 100% when net short, so
+             it stays meaningful for leveraged or short books.
+
+    Built from QC's 'Exposure' chart.
     """
-    fig, ax = plt.subplots(figsize=(10, 4.5))
     exp = results.exposure()
     if exp.empty:
+        fig, ax = plt.subplots(figsize=(10, 4.5))
         _empty_panel(ax, "Invested Level (Cash vs Equity)",
                      "No 'Exposure' chart in this file. Re-run the backtest on a "
                      "recent LEAN/QuantConnect version to record exposure.")
@@ -536,44 +554,50 @@ def build_invested_level(results, compare=None):
     long_pct = exp["long"] * 100
     short_pct = exp["short"] * 100
     net_pct = exp["net"] * 100
+    gross_pct = exp["gross"] * 100
     cash_pct = exp["cash"] * 100
     has_short = bool((short_pct < -0.05).any())
-    has_margin = bool((long_pct > 100.5).any())
+    has_margin = bool((gross_pct > 100.5).any())
 
-    # Invested (long) as a solid green area; the slim band from the top of the
-    # green up to 100% is cash, so a normal long book reads as one clean stack.
-    ax.fill_between(idx, 0, long_pct, color=GREEN, alpha=0.55, lw=0, label="Long")
-    ax.fill_between(idx, long_pct, 100, where=(long_pct <= 100), color=SLATE,
-                    alpha=0.18, lw=0, label="Cash", interpolate=True)
+    fig, (ax_exp, ax_cash) = plt.subplots(
+        2, 1, figsize=(10, 5.4), sharex=True,
+        gridspec_kw={"height_ratios": [2, 1], "hspace": 0.12})
+
+    # ---- Top: exposure ----
+    ax_exp.fill_between(idx, 0, net_pct, color=GREEN, alpha=0.18, lw=0)
+    ax_exp.plot(idx, net_pct, color=NAVY, lw=1.4, label="Net exposure")
+    if has_short or has_margin:
+        ax_exp.plot(idx, gross_pct, color=ACCENTS[0], lw=1.2, ls="-",
+                    label="Gross exposure")
     if has_short:
-        ax.fill_between(idx, short_pct, 0, color="#B0563C", alpha=0.40, lw=0,
-                        label="Short")
-
-    # Cash line: only worth drawing as its own line when the book goes on margin
-    # or short (cash leaves the simple 0-100 band); otherwise the band says it.
-    if has_margin or has_short:
-        ax.plot(idx, cash_pct, color=SLATE, lw=1.3, ls="--", label="Cash line")
-    # Net line only adds information when shorts make net differ from long.
-    if has_short:
-        ax.plot(idx, net_pct, color=NAVY, lw=1.4, label="Net invested")
-
-    ax.axhline(0, color="k", lw=0.8)
-    ax.axhline(100, color=NAVY, lw=1.0, ls=":", alpha=0.6)
-
-    # y-limits with a little headroom, accommodating margin/short excursions.
-    ymin = min(0.0, float(short_pct.min()), float(cash_pct.min())) - 5
-    ymax = max(105.0, float(long_pct.max())) + 5
-    ax.set_ylim(ymin, ymax)
-
-    avg_net = float(net_pct.mean())
-    avg_gross = float((exp["gross"] * 100).mean())
+        ax_exp.plot(idx, long_pct, color=GREEN_DARK, lw=1.0, alpha=0.8,
+                    label="Long")
+        ax_exp.plot(idx, short_pct, color="#B0563C", lw=1.0, alpha=0.8,
+                    label="Short")
+    ax_exp.axhline(100, color=SLATE, lw=1.0, ls=":", alpha=0.7)
+    if has_short or has_margin:
+        ax_exp.axhline(0, color="k", lw=0.6, alpha=0.5)
+    ax_exp.set_ylim(*_padded_ylim(
+        [net_pct, gross_pct] + ([short_pct] if has_short else []),
+        must_include=(100,) + ((0,) if (has_short or has_margin) else ())))
+    ax_exp.set_ylabel("Exposure % of PV")
+    avg_net = float(net_pct.mean()); avg_gross = float(gross_pct.mean())
     avg_cash = float(cash_pct.mean())
-    ax.set_ylabel("% of portfolio value")
-    ax.set_title(f"Invested Level (Cash vs Equity)   "
-                 f"avg net {avg_net:.0f}% / gross {avg_gross:.0f}% / cash {avg_cash:.0f}%")
-    ax.legend(loc="lower left", fontsize=8, ncol=2, framealpha=0.85,
-              facecolor="white")
-    _style(ax)
+    ax_exp.set_title(f"Invested Level (Cash vs Equity)   "
+                     f"avg net {avg_net:.0f}% / gross {avg_gross:.0f}% / "
+                     f"cash {avg_cash:.0f}%")
+    ax_exp.legend(loc="best", fontsize=8, ncol=2, framealpha=0.85,
+                  facecolor="white")
+    _style(ax_exp)
+
+    # ---- Bottom: cash / dry powder ----
+    ax_cash.fill_between(idx, 0, cash_pct, color=SLATE, alpha=0.30, lw=0)
+    ax_cash.plot(idx, cash_pct, color=SLATE, lw=1.2)
+    ax_cash.axhline(0, color="k", lw=0.8)
+    ax_cash.set_ylim(*_padded_ylim([cash_pct], must_include=(0,)))
+    ax_cash.set_ylabel("Cash % of PV")
+    _style(ax_cash)
+
     fig.tight_layout(); return fig
 
 
