@@ -530,17 +530,17 @@ def _padded_ylim(arrays, must_include=()):
 
 
 def build_invested_level(results, compare=None):
-    """How invested the portfolio is over time, split across two stacked panels:
+    """How much of the portfolio is in equity vs cash over time.
 
-      Top  - exposure as % of portfolio value: a net-exposure line (and a gross
-             line once the book shorts or levers), with the 100% reference. The
-             y-axis auto-zooms to the data so day-to-day changes and de-risking
-             episodes are visible instead of being flattened into a solid block.
-      Bottom - cash / dry powder as % of portfolio value, on its own auto-scaled
-             axis. Goes negative when on margin and above 100% when net short, so
-             it stays meaningful for leveraged or short books.
+    For a normal long book this is a clean stacked composition (an equity band
+    and a cash band) zoomed to where the data actually sits, with the average
+    invested level called out -- so the day-to-day variation and any de-risking
+    are visible instead of being crushed into a flat 0-100% wall.
 
-    Built from QC's 'Exposure' chart.
+    If the book ever shorts or trades on margin (so cash can go negative or the
+    parts no longer sum tidily to 100%), it switches to an analytical view:
+    net/gross exposure on top and signed cash/dry-powder below. Built from QC's
+    'Exposure' chart.
     """
     exp = results.exposure()
     if exp.empty:
@@ -550,6 +550,61 @@ def build_invested_level(results, compare=None):
                      "recent LEAN/QuantConnect version to record exposure.")
         fig.tight_layout(); return fig
 
+    short_pct = exp["short"] * 100
+    gross_pct = exp["gross"] * 100
+    has_short = bool((short_pct < -0.05).any())
+    has_margin = bool((gross_pct > 100.5).any())
+
+    if has_short or has_margin:
+        return _invested_analytical(exp)
+    return _invested_composition(exp)
+
+
+def _invested_composition(exp):
+    """Clean cash-vs-equity composition for a long, un-levered book."""
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    idx = exp.index
+    net_pct = (exp["net"] * 100).clip(lower=0)      # equity invested
+    cash_pct = 100 - net_pct                        # dry powder, >= 0 here
+    avg_net = float(net_pct.mean())
+    avg_cash = float(cash_pct.mean())
+
+    # Two stacked bands: equity (0 -> net) and cash (net -> 100).
+    ax.fill_between(idx, 0, net_pct, color=GREEN, alpha=0.55, lw=0)
+    ax.fill_between(idx, net_pct, 100, color=SLATE, alpha=0.22, lw=0)
+    # Boundary between the two bands, plus a smoothed average-invested trend.
+    ax.plot(idx, net_pct, color=GREEN_DARK, lw=0.8, alpha=0.7)
+    roll = net_pct.rolling(21, min_periods=1).mean()
+    ax.plot(idx, roll, color=NAVY, lw=1.8, label="Invested (21d avg)")
+    ax.axhline(100, color=SLATE, lw=1.0, ls=":", alpha=0.7)
+    ax.axhline(avg_net, color=NAVY, lw=1.0, ls="--", alpha=0.6)
+
+    # Zoom to where the data lives so the bands and variation are legible; keep
+    # 100% on screen as the natural ceiling.
+    lo = max(0.0, float(net_pct.min()) - 4)
+    ax.set_ylim(lo, 101.5)
+
+    # Label the bands directly instead of a legend swatch.
+    ax.text(0.012, 0.06, f"Equity invested — avg {avg_net:.1f}%",
+            transform=ax.transAxes, color="white", fontsize=9.5,
+            fontweight="bold", va="bottom",
+            bbox=dict(boxstyle="round,pad=0.3", fc=GREEN_DARK, ec="none", alpha=0.9))
+    ax.text(0.012, 0.93, f"Cash — avg {avg_cash:.1f}%",
+            transform=ax.transAxes, color=NAVY, fontsize=9.5, fontweight="bold",
+            va="top",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=SLATE, alpha=0.9))
+
+    ax.set_ylabel("% of portfolio value")
+    ax.set_title(f"Invested Level (Cash vs Equity)   "
+                 f"avg {avg_net:.0f}% invested / {avg_cash:.0f}% cash")
+    ax.legend(loc="lower right", fontsize=8, framealpha=0.85, facecolor="white")
+    _style(ax)
+    fig.tight_layout(); return fig
+
+
+def _invested_analytical(exp):
+    """Exposure + cash view for books that short or use margin (cash can go
+    negative; parts don't sum tidily to 100%)."""
     idx = exp.index
     long_pct = exp["long"] * 100
     short_pct = exp["short"] * 100
@@ -557,7 +612,6 @@ def build_invested_level(results, compare=None):
     gross_pct = exp["gross"] * 100
     cash_pct = exp["cash"] * 100
     has_short = bool((short_pct < -0.05).any())
-    has_margin = bool((gross_pct > 100.5).any())
 
     fig, (ax_exp, ax_cash) = plt.subplots(
         2, 1, figsize=(10, 5.4), sharex=True,
@@ -566,20 +620,17 @@ def build_invested_level(results, compare=None):
     # ---- Top: exposure ----
     ax_exp.fill_between(idx, 0, net_pct, color=GREEN, alpha=0.18, lw=0)
     ax_exp.plot(idx, net_pct, color=NAVY, lw=1.4, label="Net exposure")
-    if has_short or has_margin:
-        ax_exp.plot(idx, gross_pct, color=ACCENTS[0], lw=1.2, ls="-",
-                    label="Gross exposure")
+    ax_exp.plot(idx, gross_pct, color=ACCENTS[0], lw=1.2, label="Gross exposure")
     if has_short:
         ax_exp.plot(idx, long_pct, color=GREEN_DARK, lw=1.0, alpha=0.8,
                     label="Long")
         ax_exp.plot(idx, short_pct, color="#B0563C", lw=1.0, alpha=0.8,
                     label="Short")
     ax_exp.axhline(100, color=SLATE, lw=1.0, ls=":", alpha=0.7)
-    if has_short or has_margin:
-        ax_exp.axhline(0, color="k", lw=0.6, alpha=0.5)
+    ax_exp.axhline(0, color="k", lw=0.6, alpha=0.5)
     ax_exp.set_ylim(*_padded_ylim(
         [net_pct, gross_pct] + ([short_pct] if has_short else []),
-        must_include=(100,) + ((0,) if (has_short or has_margin) else ())))
+        must_include=(100, 0)))
     ax_exp.set_ylabel("Exposure % of PV")
     avg_net = float(net_pct.mean()); avg_gross = float(gross_pct.mean())
     avg_cash = float(cash_pct.mean())
