@@ -681,15 +681,11 @@ def build_execution_time_hist(results, compare=None):
                      "fill timestamps recorded).")
         fig.tight_layout(); return fig
 
-    # Everything filled in the same instant -> not a distribution. Say so
-    # clearly instead of drawing a single full-width bar that looks broken.
-    if float(lat.max()) <= 0:
-        _empty_panel(
-            ax, "Order Execution Time",
-            f"All {len(lat):,} orders filled in the same instant they were "
-            f"submitted (0s latency).\nThat's normal for market orders in a "
-            f"backtest. Use limit/stop orders or intraday\nresolution to see a "
-            f"spread of execution times here.")
+    # When (almost) every order fills in the same instant, a continuous
+    # histogram is just one spike. Draw a bucketed bar chart instead so there's
+    # always a real graph, with the count in each latency band.
+    if float(np.percentile(lat, 99)) <= 0:
+        _execution_buckets(ax, lat)
         fig.tight_layout(); return fig
 
     # Pick a unit from the 95th percentile so a few long-resting orders don't
@@ -724,6 +720,40 @@ def build_execution_time_hist(results, compare=None):
                     arrowprops=dict(arrowstyle="->", color=SLATE, lw=0.8))
     _style(ax)
     fig.tight_layout(); return fig
+
+
+# Latency buckets (seconds) for the degenerate / near-instant case.
+_LAT_BUCKETS = [
+    ("0s\n(same bar)", lambda s: s == 0),
+    ("≤1 min",         lambda s: (s > 0) & (s <= 60)),
+    ("1–60 min",       lambda s: (s > 60) & (s <= 3600)),
+    ("1–24 h",         lambda s: (s > 3600) & (s <= 86400)),
+    (">1 day",         lambda s: s > 86400),
+]
+
+
+def _execution_buckets(ax, lat):
+    """Bar chart of order count per latency band. Always renders something, even
+    when every order fills instantly (one full '0s' bar)."""
+    counts = [int(cond(lat).sum()) for _, cond in _LAT_BUCKETS]
+    labels = [lbl for lbl, _ in _LAT_BUCKETS]
+    x = np.arange(len(labels))
+    bars = ax.bar(x, counts, width=0.62, color=PRIMARY, alpha=0.85)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=8)
+    ax.set_ylabel("Number of orders")
+    n = len(lat)
+    imm = counts[0]
+    ax.set_ylim(0, max(counts + [1]) * 1.18)
+    for b, c in zip(bars, counts):
+        if c:
+            ax.text(b.get_x() + b.get_width() / 2, c, f"{c:,}",
+                    ha="center", va="bottom", fontsize=9, fontweight="bold",
+                    color=NAVY)
+    pct = (imm / n * 100) if n else 0
+    ax.set_title(f"Order Execution Time   n={n:,}   "
+                 f"{pct:.0f}% filled same bar (0s latency)")
+    _style(ax)
 
 
 # ----------------------------------------------------------------- registry
